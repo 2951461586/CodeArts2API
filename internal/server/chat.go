@@ -251,7 +251,24 @@ func (s *Server) streamOnce(ctx context.Context, acct *codearts.Account, model r
 	})
 }
 
-// withAccountRetry 选账号并在失败时换号重试。
+// 重试相关常量。
+//
+// 尝试次数与账号数量**解耦**：上游最常见的失败是「每账号 3 个并发会话」打满
+// （TM.00001041），此时账号本身是健康的，只要退避重试即可 —— 如果只有 1 个账号
+// 就退化成「不重试」，客户端会直接拿到 502。
+const (
+	// defaultMaxAttempts 是设置里未配置时的尝试次数。
+	defaultMaxAttempts = 3
+	// maxAttemptsCap 是尝试次数上限，防止设置被填成很大时长时间占用连接。
+	maxAttemptsCap = 8
+	// transientBaseWait 是临时性故障的退避基数（第 n 次退避 = n * base）。
+	// 上游会话释放需要时间，太短（曾经是 300ms）基本等于不退避。
+	transientBaseWait = time.Second
+	// transientMaxWait 是单次退避上限。
+	transientMaxWait = 3 * time.Second
+)
+
+// withAccountRetry 选账号并在失败时重试。
 //
 // 返回本次实际使用的账号（可能为 nil），供调用方记录日志归属。
 func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn func(context.Context, *codearts.Account) error) (*codearts.Account, error) {
@@ -259,17 +276,18 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 	if len(accts) == 0 {
 		return nil, errNoAccount
 	}
-	maxTries := s.Store.Settings().MaxRetries
-	if maxTries <= 0 {
-		maxTries = 3
+	attempts := s.Store.Settings().MaxRetries
+	if attempts <= 0 {
+		attempts = defaultMaxAttempts
 	}
-	if maxTries > len(accts) {
-		maxTries = len(accts)
+	if attempts > maxAttemptsCap {
+		attempts = maxAttemptsCap
 	}
 
 	var lastErr error
 	var used *codearts.Account
-	for i := 0; i < maxTries; i++ {
+	transientWaits := 0
+	for i := 0; i < attempts; i++ {
 		acct := s.Store.NextAccount()
 		if acct == nil {
 			break
@@ -290,13 +308,15 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 		}
 		// 临时性故障（并发上限 / 429 / 5xx）：账号本身没问题，退避后重试
 		if codearts.IsTransientUpstream(err) {
-			if i < maxTries-1 {
-				wait := time.Duration(300*(i+1)) * time.Millisecond
-				select {
-				case <-ctx.Done():
-					return used, lastErr
-				case <-time.After(wait):
-				}
+			if i == attempts-1 {
+				break
+			}
+			transientWaits++
+			wait := min(time.Duration(transientWaits)*transientBaseWait, transientMaxWait)
+			select {
+			case <-ctx.Done():
+				return used, lastErr
+			case <-time.After(wait):
 			}
 			continue
 		}
