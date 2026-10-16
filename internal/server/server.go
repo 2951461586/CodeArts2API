@@ -153,6 +153,9 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
+// IsLoopbackHost 供启动时判断监听范围（是否只监听本机）。
+func IsLoopbackHost(host string) bool { return isLoopbackHost(host) }
+
 // withAuth 校验 Bearer 密钥。
 //
 // 未签发任何密钥时，允许无密钥访问（首次使用的便利）；
@@ -180,7 +183,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 //
 // 鉴权策略：
 //   - 已设置管理密码：必须通过 X-Admin-Password 或 Authorization: Bearer 提供；
-//   - 未设置管理密码：仅允许来自本机环回的请求。
+//   - 未设置管理密码：仅允许**本机直连**（环回地址且未经代理转发）。
 //
 // 另外对写操作做同源校验，阻断跨站请求伪造。
 func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -190,8 +193,11 @@ func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 				writeErr(w, http.StatusUnauthorized, "管理密码缺失或错误", "invalid_request_error")
 				return
 			}
-		} else if !isLoopbackAddr(r.RemoteAddr) {
-			writeErr(w, http.StatusForbidden, "未设置管理密码，管理接口仅允许本机访问", "invalid_request_error")
+		} else if !s.localDirect(r) {
+			writeErr(w, http.StatusForbidden,
+				"未设置管理密码，管理接口仅允许本机直连访问（检测到代理转发或非环回地址）。"+
+					"如通过反向代理 / 容器暴露，请在设置里配置管理密码。",
+				"invalid_request_error")
 			return
 		}
 
@@ -250,6 +256,39 @@ func (s *Server) adminSameOrigin(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// forwardingHeaders 是反向代理通常会加上的请求头。
+//
+// 只要出现其中之一，就说明调用方不是本机直连 —— RemoteAddr 是代理的地址。
+var forwardingHeaders = []string{
+	"X-Forwarded-For",
+	"X-Forwarded-Host",
+	"X-Forwarded-Proto",
+	"X-Real-Ip",
+	"X-Client-Ip",
+	"True-Client-Ip",
+	"Forwarded",
+}
+
+// viaProxy 报告请求是否经过反向代理。
+func viaProxy(r *http.Request) bool {
+	for _, h := range forwardingHeaders {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// localDirect 报告请求是否来自「本机直连」。
+//
+// 管理接口在未设密码时、/v1 在未签发密钥时都靠它做兜底鉴权。
+// 只看 RemoteAddr 是不够的：同机反向代理（nginx `proxy_pass 127.0.0.1:10087`）
+// 会把**所有**公网请求的 RemoteAddr 变成 127.0.0.1，从而把管理接口
+// （含导出完整登录态）暴露给公网。
+func (s *Server) localDirect(r *http.Request) bool {
+	return !viaProxy(r) && isLoopbackAddr(r.RemoteAddr)
 }
 
 // isLoopbackAddr 判断 TCP 远端地址是否为本机环回。

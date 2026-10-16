@@ -126,10 +126,13 @@ func main() {
 		} else {
 			log.Printf("尚未签发 API 密钥，当前允许无密钥调用（控制台可创建）")
 		}
-		if st.Settings().AdminPassword != "" {
+		switch {
+		case st.Settings().AdminPassword != "":
 			log.Printf("管理接口已启用密码校验（X-Admin-Password / Bearer）")
-		} else {
-			log.Printf("未设置管理密码，管理接口仅允许本机访问（可用 -admin-password 设置）")
+		case server.IsLoopbackHost(*host):
+			log.Printf("未设置管理密码，管理接口仅允许本机直连访问（可用 -admin-password 设置）")
+		default:
+			log.Printf("⚠️  监听 %s 且未设置管理密码：管理接口将拒绝一切非本机直连请求，请用 -admin-password 设置密码", *host)
 		}
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("监听失败: %v", err)
