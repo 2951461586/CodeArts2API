@@ -121,8 +121,9 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 		return nil
 	})
 	if err != nil {
-		s.record(key, acct, model.ID, false, http.StatusBadGateway, start, promptLen, 0, err)
-		writeAnthropicErr(w, http.StatusBadGateway, "api_error", err.Error())
+		status := statusOf(err)
+		s.record(key, acct, model.ID, false, status, start, promptLen, 0, err)
+		writeAnthropicErr(w, status, anthropicErrorType(status), err.Error())
 		return
 	}
 
@@ -173,19 +174,19 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 	streamErr = err
 
 	if !started {
-		status := http.StatusBadGateway
+		status := statusOf(err)
 		msg := "全部账号均不可用"
 		if err != nil {
 			msg = err.Error()
 		}
 		s.record(key, acct, model.ID, true, status, start, promptLen, outLen, err)
-		writeAnthropicErr(w, status, "api_error", msg)
+		writeAnthropicErr(w, status, anthropicErrorType(status), msg)
 		return
 	}
 	if streamErr != nil {
 		writeSSE(w, flusher, "error", map[string]any{
 			"type":  "error",
-			"error": map[string]any{"type": "api_error", "message": streamErr.Error()},
+			"error": map[string]any{"type": anthropicErrorType(statusOf(streamErr)), "message": streamErr.Error()},
 		})
 	}
 	s.record(key, acct, model.ID, true, statusOf(streamErr), start, promptLen, outLen, streamErr)
@@ -669,6 +670,20 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, event string, payload map[s
 	}
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, raw)
 	f.Flush()
+}
+
+// anthropicErrorType 把 HTTP 状态码映射为 Anthropic 的错误 type。
+func anthropicErrorType(status int) string {
+	switch status {
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusBadRequest, http.StatusNotFound:
+		return "invalid_request_error"
+	case http.StatusServiceUnavailable, http.StatusBadGateway:
+		return "overloaded_error"
+	default:
+		return "api_error"
+	}
 }
 
 // writeAnthropicErr 按 Anthropic 的错误结构返回。

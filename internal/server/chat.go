@@ -107,8 +107,9 @@ func (s *Server) blockingChat(w http.ResponseWriter, r *http.Request, body []byt
 		return nil
 	})
 	if err != nil {
-		s.record(key, acct, model.ID, false, http.StatusBadGateway, start, promptLen, 0, err)
-		writeErr(w, http.StatusBadGateway, err.Error(), "upstream_error")
+		status := statusOf(err)
+		s.record(key, acct, model.ID, false, status, start, promptLen, 0, err)
+		writeErr(w, status, err.Error(), errorTypeOf(err))
 		return
 	}
 
@@ -159,22 +160,23 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 
 	if !started {
 		// 上游连一次都没成功：按普通错误返回，客户端能拿到明确的状态码
-		status := http.StatusBadGateway
+		status := statusOf(err)
 		msg := "全部账号均不可用"
 		if err != nil {
 			msg = err.Error()
 		}
 		s.record(key, acct, model.ID, true, status, start, promptLen, outLen, err)
-		writeErr(w, status, msg, "upstream_error")
+		writeErr(w, status, msg, errorTypeOf(err))
 		return
 	}
 
 	if streamErr != nil {
-		// 已经在流里了，只能以 SSE 错误块收尾
+		// 已经在流里了，只能以 SSE 错误块收尾（OpenAI 客户端只看 error 对象）
 		errChunk, _ := json.Marshal(map[string]any{
 			"error": map[string]any{
 				"message": streamErr.Error(),
-				"type":    "upstream_error",
+				"type":    errorTypeOf(streamErr),
+				"code":    statusOf(streamErr),
 			},
 		})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", errChunk)
@@ -384,12 +386,57 @@ func (s *Server) record(key string, acct *codearts.Account, model string, stream
 	s.Store.Record(e, outLen)
 }
 
-// statusOf 把错误映射为 HTTP 状态码。
+// statusOf 把错误映射为合适的 HTTP 状态码。
+//
+// 一律回 502 会丢掉语义：客户端无法区分「稍后重试即可」（并发上限 / 限流）
+// 与「请求本身有问题」，也无法对 429 做退避。
 func statusOf(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-	return http.StatusBadGateway
+	if errors.Is(err, errNoAccount) {
+		return http.StatusServiceUnavailable
+	}
+	var ue *codearts.UpstreamError
+	if !errors.As(err, &ue) {
+		// 凭据不可用、网络错误等：都是网关侧的问题
+		return http.StatusBadGateway
+	}
+	switch {
+	case codearts.IsTransientUpstream(err):
+		// 上游 5xx 用 502；并发上限（上游用 400 表达）与 429 用 429，
+		// 让客户端知道「等一会再试」而不是「请求错了」。
+		if ue.Status >= 500 {
+			return http.StatusBadGateway
+		}
+		return http.StatusTooManyRequests
+	case ue.Status == http.StatusNotFound:
+		return http.StatusNotFound
+	case ue.Status == http.StatusOK:
+		// 上游用「HTTP 200 + error_code」表达的业务错误（未知模型、参数非法…），
+		// 属于客户端问题，不应报成网关故障。
+		return http.StatusBadRequest
+	case ue.Status >= 400 && ue.Status < 500:
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+// errorTypeOf 返回 OpenAI 风格的错误 type（与 statusOf 配套）。
+func errorTypeOf(err error) string {
+	switch statusOf(err) {
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusNotFound:
+		return "invalid_request_error"
+	case http.StatusServiceUnavailable:
+		return "server_error"
+	default:
+		return "upstream_error"
+	}
 }
 
 // estimatePromptLen 粗略估算输入规模（上游不返回 prompt token 数时使用）。
