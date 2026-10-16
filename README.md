@@ -33,8 +33,8 @@
 **目录**：[一、快速开始](#一快速开始) ·
 [二、模型与两条通道](#二支持的模型与两条通道) · [三、凭据与续期](#三凭据与续期) ·
 [四、控制台](#四控制台) · [五、HTTP 接口](#五http-接口) ·
-[六、工程结构](#六工程结构) · [七、安全说明](#七安全说明) ·
-[八、免责声明](#八免责声明) · [九、许可证](#九许可证)
+[六、工程结构](#六工程结构) · [七、开发与自检](#七开发与自检) ·
+[八、安全说明](#八安全说明) · [九、免责声明](#九免责声明) · [十、许可证](#十许可证)
 
 ---
 
@@ -499,13 +499,37 @@ CodeArts2API/
 │  │  ├─ login.go              # 浏览器登录 API
 │  │  └─ admin.go  server.go  web/
 │  └─ store/             # APIKey / 日志 / 设置 / 账号池
-├─ tools/                # 逆向 PoC 脚本（Python）
+├─ tools/                # 辅助脚本（Python）
+│  ├─ decrypt_session.py  # 只读解密 state.vscdb，验证凭据能否读到
+│  ├─ probe_api.py        # 直接打上游的签名 PoC
+│  └─ check_html_js.py    # 校验内嵌控制台的 JS 能否解析（含 node --check）
 └─ docs/RECON.md         # 逆向勘察报告
 ```
 
 ---
 
-## 七、安全说明
+## 七、开发与自检
+
+```bash
+go build ./... && go vet ./... && go test ./...
+
+# 校验内嵌控制台单页的 JS 能否解析（跨行字符串 / 括号配对 / node --check）
+python tools/check_html_js.py internal/server/web/index.html
+
+# 本机诊断：凭据 / 模型 / 额度 / 活动福利 / 对话探活
+go run ./cmd/probe
+```
+
+> 控制台只有一个 `<script>` 区块，**任何一处语法错误都会让整段脚本不执行** ——
+> 按钮、事件绑定、初始加载全部失效，表现是「能输密码但点什么都没反应」。
+> 最容易踩的坑是把真实换行打进字符串字面量（JS 的 `"..."` 不能跨行）。
+> 除脚本外，`go test ./internal/server/` 里也有对应守卫：
+> `TestConsoleScriptHasNoMultilineString`（跨行字符串）与
+> `TestConsoleScriptBalanced`（括号配对 + `<script>` 唯一）。
+
+---
+
+## 八、安全说明
 
 - 状态文件（`codearts2api-data.json`）里含 STS 凭据与 `refresh_token`，
   已用 `0600` 权限写入；请勿提交到版本库（见 `.gitignore`）。
@@ -517,7 +541,7 @@ CodeArts2API/
 
 ---
 
-## 八、免责声明
+## 九、免责声明
 
 - 本项目是**互操作性研究**的产物，目的是让已有的账号权益能在用户自己选择的
   客户端里使用，不提供、不代理、不转售任何模型能力。
@@ -530,7 +554,7 @@ CodeArts2API/
 
 ---
 
-## 九、许可证
+## 十、许可证
 
 本项目以 [Apache License 2.0](LICENSE) 授权发布。
 

@@ -171,12 +171,15 @@
         <div class="row">
           <div style="flex:1;min-width:320px">
             <div id="loginStatus" class="muted">等待打开授权页…</div>
-            <div class="hint">回调地址是 <code>127.0.0.1</code>，因此**浏览器必须与网关在同一台机器上**。</div>
-            <label>授权地址（点开或复制到浏览器）</label>
+            <div class="hint">回调地址是 <code>127.0.0.1</code>，因此<b>浏览器必须与网关在同一台机器上</b>。</div>
+            <label>授权地址（点链接打开，或复制到浏览器）</label>
             <input id="loginURL" readonly style="width:100%" onclick="this.select()">
           </div>
           <div>
-            <button class="btn primary" id="loginOpen">打开授权页</button>
+            <!-- 用真实链接而不是 window.open：弹窗拦截器不会拦，也没有 open-redirect 面 -->
+            <a class="btn primary" id="loginLink" href="#" target="_blank"
+               rel="noopener noreferrer" style="display:none;text-decoration:none">打开授权页</a>
+            <button class="btn" id="loginCopy" style="margin-top:8px">复制地址</button>
             <button class="btn danger" id="loginCancel" style="margin-top:8px">取消</button>
           </div>
         </div>
@@ -638,9 +641,7 @@
       var results = r.results || [];
       var bad = results.filter(function(x){ return !x.ok; });
       toast("签到完成：" + (r.succeeded||0) + "/" + (r.total||0) + " 成功" +
-        (bad.length ? "
-" + bad.map(function(x){ return x.name + ": " + x.message; }).join("
-") : ""),
+        (bad.length ? "\n" + bad.map(function(x){ return x.name + ": " + x.message; }).join("\n") : ""),
         bad.length ? "err" : "ok");
       return refresh();
     }).catch(function(e){ toast("签到失败：" + e.message, "err"); });
@@ -678,8 +679,7 @@
       if (r.status === "confirmed") {
         stopLogin();
         toast("浏览器登录成功：" + (r.account_name || r.account || "") +
-          (r.access_key ? "
-AK " + r.access_key : ""), "ok");
+          (r.access_key ? "\nAK " + r.access_key : ""), "ok");
         $("#loginPanel").style.display = "none";
         refresh();
       } else if (r.status === "failed" || r.status === "expired" || r.status === "canceled") {
@@ -727,6 +727,42 @@ AK " + r.access_key : ""), "ok");
       $("#welfareHint").textContent = "";
       toast("获取活动列表失败：" + e.message, "err");
     });
+  }
+
+  // isTrustedAuthURL 只允许华为云门户 / 本机回环的授权地址。
+  //
+  // 授权 URL 由网关自己拼出来（/admin/api/login/start），理论上不可注入；
+  // 但这里是唯一一处「拿后端返回的 URL 去跳转」的地方，加一道白名单成本很低，
+  // 可以挡住管理密码泄露、或将来某个 bug 让 portal_host 变成可控的情况。
+  function isTrustedAuthURL(raw){
+    var u;
+    try { u = new URL(raw); } catch(e){ return false; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    var host = u.hostname.toLowerCase();
+    if (u.protocol === "http:") {
+      // 明文 http 只允许本机（本地联调）
+      return host === "127.0.0.1" || host === "localhost" || host === "::1";
+    }
+    return host === "huaweicloud.com" || host.endsWith(".huaweicloud.com")
+        || host === "huaweicloud.cn"  || host.endsWith(".huaweicloud.cn")
+        || host === "huawei.com"      || host.endsWith(".huawei.com");
+  }
+
+  // setLoginURL 把授权地址写进只读输入框，并只在通过白名单时才挂到链接上。
+  function setLoginURL(raw){
+    var ok = isTrustedAuthURL(raw);
+    $("#loginURL").value = raw || "";
+    var a = $("#loginLink");
+    if (ok) {
+      a.href = raw;
+      a.style.display = "";
+    } else {
+      a.removeAttribute("href");
+      a.style.display = "none";
+      toast("授权地址不在白名单内，已禁止直接打开：\n" + raw +
+        "\n（仅允许 *.huaweicloud.com / *.huaweicloud.cn / *.huawei.com 与本机回环）", "err");
+    }
+    return ok;
   }
 
   // --- events ---
@@ -787,7 +823,7 @@ AK " + r.access_key : ""), "ok");
   };
   $("#browserLogin").onclick = function(){
     api("/admin/api/login/start", {method:"POST", body:{}}).then(function(r){
-      $("#loginURL").value = r.auth_url;
+      setLoginURL(r.auth_url);
       $("#loginStatus").textContent = "等待在浏览器里完成登录…";
       $("#loginPanel").style.display = "block";
       stopLogin();
@@ -795,9 +831,12 @@ AK " + r.access_key : ""), "ok");
       loginTimer = setInterval(pollLogin, 2000);
     }).catch(function(e){ toast("启动登录失败：" + e.message, "err"); });
   };
-  $("#loginOpen").onclick = function(){
-    var u = $("#loginURL").value;
-    if (u) window.open(u, "_blank", "noopener");
+  $("#loginCopy").onclick = function(){
+    var el = $("#loginURL");
+    if (!el.value) { toast("请先点击「浏览器登录」获取授权地址", "err"); return; }
+    el.select();
+    try { document.execCommand("copy"); toast("已复制授权地址", "ok"); }
+    catch(e){ toast("请手动复制", "err"); }
   };
   $("#copyExport").onclick = function(){
     var el = $("#exportJSON");
