@@ -1,0 +1,28 @@
+---
+services:
+  codearts2api:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: codearts2api:latest
+    container_name: codearts2api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:10087:10087"
+    volumes:
+      - ./data:/data
+    environment:
+      # 管理密码：不设置则管理接口仅允许容器内访问，建议通过反向代理暴露
+      CODEARTS_ADMIN_PASSWORD: ${CODEARTS_ADMIN_PASSWORD:-}
+      TZ: Asia/Shanghai
+    command:
+      - -host
+      - 0.0.0.0
+      - -port
+      - "10087"
+      - -data
+      - /data/codearts2api-data.json
+      # 容器里没有 DPAPI，无法自动读取桌面端凭据；
+      # 请在控制台用「手工录入」或「从 session JSON 导入」提供凭据。
+      - -no-import

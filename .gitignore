@@ -1,0 +1,15 @@
+# 构建产物
+/codearts2api
+/codearts2api.exe
+*.exe
+
+# 运行期状态（含 STS 凭据与 refresh_token，绝不入库）
+codearts2api-data.json
+codearts2api-data.json.tmp
+*.codearts2api.bak
+*.codearts2api.tmp
+
+# 逆向中间产物
+.recon/
+__pycache__/
+*.pyc
