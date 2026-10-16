@@ -165,6 +165,34 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 
+	case "export":
+		a := s.Store.Account(body.ID)
+		if a == nil {
+			writeErr(w, http.StatusBadRequest, "账号不存在", "invalid_request_error")
+			return
+		}
+		s.Cred.Invalidate(a.ID)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "导出失败: "+err.Error(), "upstream_error")
+			return
+		}
+		plain, err := sess.RawJSON()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "序列化失败: "+err.Error(), "server_error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":           true,
+			"name":         a.DisplayName(),
+			"session_json": string(plain),
+			"expires_at":   sess.ExpiresAt.Unix(),
+			"has_refresh":  sess.HasRefresh(),
+			"warning":      "该内容等同于账号登录态（含 refresh_token 与 DPoP 私钥），请勿外传或提交到版本库",
+		})
+
 	case "reimport":
 		a := s.Store.Account(body.ID)
 		if a == nil {

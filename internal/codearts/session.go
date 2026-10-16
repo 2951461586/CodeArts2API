@@ -58,10 +58,13 @@ func (s *Session) HasRefresh() bool {
 	return s != nil && s.RefreshToken != "" && len(s.DPoPPrivateJWK) > 0 && s.CodeVerifier != ""
 }
 
-// RawJSON 返回可用于回写 state.vscdb 的 session JSON。
+// RawJSON 返回可用于回写 state.vscdb / 导出的 session JSON。
 //
 // 只覆盖凭据相关字段，其余（loginContext / account / domainId …）原样保留，
 // 避免把 IDE 侧依赖的字段抹掉。
+//
+// 对「浏览器登录」创建的会话（没有原始 raw），会把 DPoP 私钥与 PKCE verifier
+// 补进 loginContext，这样导出的 JSON 在别处导入后**仍能自动续期**。
 func (s *Session) RawJSON() ([]byte, error) {
 	m := map[string]any{}
 	for k, v := range s.raw {
@@ -75,7 +78,36 @@ func (s *Session) RawJSON() ([]byte, error) {
 	if !s.ExpiresAt.IsZero() {
 		m["expires_at"] = s.ExpiresAt.UTC().Format("2006-01-02T15:04:05.000Z")
 	}
+	if len(s.DPoPPrivateJWK) > 0 {
+		s.ensureLoginContext(m)
+	}
 	return json.Marshal(m)
+}
+
+// ensureLoginContext 确保 m 里的 loginContext 带着续期所需的材料。
+//
+// 只在缺失时补齐 —— 已存在的字段一律不动，否则会改变序列化后的长度，
+// 影响 writeBackSession 的「同长度原地覆写」。
+func (s *Session) ensureLoginContext(m map[string]any) {
+	lc, _ := m["loginContext"].(map[string]any)
+	if lc == nil {
+		lc = map[string]any{}
+	}
+	if _, ok := lc["pkcePair"]; !ok && s.CodeVerifier != "" {
+		lc["pkcePair"] = map[string]any{"codeVerifier": s.CodeVerifier}
+	}
+	pair, _ := lc["dpopKeyPair"].(map[string]any)
+	if pair == nil {
+		pair = map[string]any{}
+	}
+	if _, ok := pair["privateKeyJwk"]; !ok {
+		pair["privateKeyJwk"] = json.RawMessage(s.DPoPPrivateJWK)
+	}
+	if _, ok := pair["publicKeyJwk"]; !ok && len(s.DPoPPublicJWK) > 0 {
+		pair["publicKeyJwk"] = json.RawMessage(s.DPoPPublicJWK)
+	}
+	lc["dpopKeyPair"] = pair
+	m["loginContext"] = lc
 }
 
 // SessionFromJSON 从 state.vscdb 解出的明文 session JSON 构造 Session。

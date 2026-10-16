@@ -147,6 +147,25 @@
         <button class="btn" id="checkinAll">全部探活</button>
         <button class="btn" id="claimAll">立即签到领福利</button>
       </div>
+      <div class="card" id="exportPanel" style="display:none">
+        <h2>导出 session JSON</h2>
+        <div class="row">
+          <div style="flex:1;min-width:320px">
+            <div id="exportMeta" class="muted"></div>
+            <label>session JSON（可直接粘贴到另一台机器 / 容器的「从 session JSON 导入」）</label>
+            <textarea id="exportJSON" readonly style="width:100%;min-height:160px" onclick="this.select()"></textarea>
+          </div>
+          <div>
+            <button class="btn primary" id="copyExport">复制</button>
+            <button class="btn danger" id="closeExport" style="margin-top:8px">关闭</button>
+          </div>
+        </div>
+        <div class="hint" style="color:var(--warn)">
+          ⚠️ 该内容等同于账号登录态：含 refresh_token（约 30 天）与 DPoP 私钥。
+          不要外传、不要提交到版本库、不要贴到聊天里。
+        </div>
+      </div>
+
       <div class="card" id="loginPanel" style="display:none">
         <h2>浏览器登录</h2>
         <div class="row">
@@ -483,6 +502,8 @@
       ops.appendChild(document.createTextNode(" "));
       ops.appendChild(btn("重读", "", function(){ accountOp("reimport", {id:a.id}); }));
       ops.appendChild(document.createTextNode(" "));
+      ops.appendChild(btn("导出", "", function(){ exportSession(a.id); }));
+      ops.appendChild(document.createTextNode(" "));
       ops.appendChild(btn(a.enabled ? "停用" : "启用", "", function(){ accountOp("toggle", {id:a.id}); }));
       if (a.failures > 0) {
         ops.appendChild(document.createTextNode(" "));
@@ -625,6 +646,18 @@
     }).catch(function(e){ toast("签到失败：" + e.message, "err"); });
   }
 
+  function exportSession(id){
+    toast("导出中…");
+    api("/admin/api/accounts", {method:"POST", body:{action:"export", id:id}}).then(function(r){
+      $("#exportJSON").value = r.session_json || "";
+      $("#exportMeta").textContent = "账号 " + (r.name||"") +
+        " · 凭据有效期至 " + fmtTime(r.expires_at) +
+        " · 可续期 " + (r.has_refresh ? "是" : "否");
+      $("#exportPanel").style.display = "block";
+      toast("已导出（含 refresh_token，请勿外传）", "ok");
+    }).catch(function(e){ toast("导出失败：" + e.message, "err"); });
+  }
+
   // --- 浏览器登录 ---
   var loginTimer = null, loginSid = null;
   function stopLogin(){
@@ -765,6 +798,16 @@ AK " + r.access_key : ""), "ok");
   $("#loginOpen").onclick = function(){
     var u = $("#loginURL").value;
     if (u) window.open(u, "_blank", "noopener");
+  };
+  $("#copyExport").onclick = function(){
+    var el = $("#exportJSON");
+    el.select();
+    try { document.execCommand("copy"); toast("已复制到剪贴板（注意不要外传）", "ok"); }
+    catch(e){ toast("请手动复制", "err"); }
+  };
+  $("#closeExport").onclick = function(){
+    $("#exportJSON").value = "";
+    $("#exportPanel").style.display = "none";
   };
   $("#loginCancel").onclick = function(){
     if (loginSid) api("/admin/api/login/cancel", {method:"POST", body:{session_id:loginSid}}).catch(function(){});

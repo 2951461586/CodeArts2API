@@ -6,7 +6,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,6 +36,7 @@ func main() {
 		dataPath   = flag.String("data", envOr("CODEARTS_DATA_PATH", ""), "状态文件路径（默认在可执行文件同目录）")
 		userData   = flag.String("user-data", envOr("CODEARTS_USER_DATA", ""), "CodeArts Agent 的 User Data 目录（留空自动探测）")
 		importOnly = flag.Bool("import", false, "仅执行一次桌面端凭据导入后退出")
+		exportPath = flag.String("export-session", "", "把本机登录态导出为 session JSON（路径，或用 - 输出到 stdout）后退出")
 		noImport   = flag.Bool("no-import", false, "启动时不自动导入桌面端登录态")
 		noRefresh  = flag.Bool("no-refresh", false, "禁止网关自行续期（只读 IDE 会话）")
 		adminPw    = flag.String("admin-password", envOr("CODEARTS_ADMIN_PASSWORD", ""), "管理密码（非空时覆盖状态文件中的设置）")
@@ -58,6 +61,10 @@ func main() {
 
 	if *importOnly {
 		runImport(st, *userData)
+		return
+	}
+	if *exportPath != "" {
+		runExportSession(*userData, *exportPath)
 		return
 	}
 
@@ -195,6 +202,42 @@ func runImport(st *store.Store, dir string) {
 		log.Fatalf("保存失败: %v", err)
 	}
 	fmt.Printf("共导入 %d 个账号（新增 %d，更新 %d）→ %s\n", len(results), added, updated, st.Path())
+}
+
+// runExportSession 把本机登录态导出为 session JSON。
+//
+// 导出的内容与「从 session JSON 导入」完全对称，可直接粘贴到另一台机器或
+// 容器的控制台里；因为带着 refresh_token 与 DPoP 私钥，导入后仍能自动续期。
+func runExportSession(userData, out string) {
+	results, err := codearts.ImportFromDesktop(userData)
+	if err != nil {
+		log.Fatalf("导出失败: %v", err)
+	}
+	res := results[0]
+	plain, err := res.Account.Session.RawJSON()
+	if err != nil {
+		log.Fatalf("序列化失败: %v", err)
+	}
+	// 缩进一下，方便人工核对与粘贴
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, plain, "", "  "); err != nil {
+		pretty.Write(plain)
+	}
+
+	if out == "-" {
+		fmt.Println(pretty.String())
+	} else {
+		if err := os.WriteFile(out, pretty.Bytes(), 0o600); err != nil {
+			log.Fatalf("写入 %s 失败: %v", out, err)
+		}
+		fmt.Printf("已导出 session JSON → %s（%d 字节）\n", out, pretty.Len())
+	}
+	fmt.Fprintln(os.Stderr, "\n⚠️  该文件等同于账号登录态，含 refresh_token（约 30 天）与 DPoP 私钥：")
+	fmt.Fprintln(os.Stderr, "   - 不要提交到版本库、不要发给他人、不要贴到聊天里")
+	fmt.Fprintf(os.Stderr, "   - 账号 %s，凭据有效期至 %s，可续期 %v\n",
+		res.Account.DisplayName(),
+		res.Expires.Local().Format("2006-01-02 15:04:05"),
+		res.Account.Session.HasRefresh())
 }
 
 // defaultDataPath 返回默认状态文件路径（可执行文件同目录）。

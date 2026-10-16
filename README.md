@@ -81,6 +81,7 @@ curl http://127.0.0.1:10087/v1/messages \
 | `-user-data` | `CODEARTS_USER_DATA` | CodeArts Agent 的 User Data 目录 |
 | `-admin-password` | `CODEARTS_ADMIN_PASSWORD` | 管理密码 |
 | `-import` | — | 只导入一次凭据并退出 |
+| `-export-session` | — | 把本机登录态导出为 session JSON（路径，或 `-` 输出到 stdout）后退出 |
 | `-no-import` | — | 启动时不自动导入 |
 | `-no-refresh` | — | 禁止网关自行续期（只读 IDE 会话） |
 
@@ -287,6 +288,9 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 | **本地浏览器登录** | 没装 IDE，或想给网关单独登录一个账号 | 网关自己起 OAuth 回调服务器，用浏览器完成登录 |
 | **手工录入 / session JSON** | 跨平台、Docker、远程部署 | 填 STS 临时 AK/SK，或粘贴解密后的 session JSON（含 refresh_token，仍可自动续期） |
 
+导出的 session JSON 是**可移植**的 —— 它带着 `refresh_token`、DPoP 私钥与 PKCE
+verifier，所以在另一台机器 / 容器里导入后**仍然能自动续期**，不是只能活 2 小时。
+
 #### 桌面端登录态是怎么解出来的
 
 CodeArts Agent 是 VS Code fork，登录会话存在 VS Code 的 secret storage 里，
@@ -304,7 +308,55 @@ go run ./cmd/probe              # 全量诊断：凭据 / 模型 / 额度 / 签�
 go run ./cmd/probe -dump-keys   # 只列出 state.vscdb 里 ItemTable 的全部键名
 ```
 
-### 3.2 本地浏览器登录（OAuth 回调）
+### 3.2 导出 session JSON
+
+三种方式任选：
+
+```bash
+# 1) 命令行，写文件
+codearts2api.exe -export-session D:\codearts-session.json
+
+# 2) 命令行，直接输出（方便管道）
+codearts2api.exe -export-session - > codearts-session.json
+
+# 3) 控制台：账号页 → 该账号的「导出」按钮（弹窗里可一键复制）
+```
+
+导出内容就是 IDE 存的那份 session，字段齐全：
+
+```jsonc
+{
+  "account":      {"id": "...", "label": "hid_xxx"},
+  "domainId":     "...",
+  "accessKey":    "HSTA...",          // STS 临时 AK（约 2 小时）
+  "secretKey":    "...",
+  "securitytoken":"...",
+  "refresh_token":"eyJ0eXAi...",      // JWT，约 30 天
+  "expires_at":   "2026-10-16T09:44:33.108Z",
+  "loginContext": {
+    "pkcePair":    {"codeVerifier": "...", "codeChallenge": "...", "codeChallengeMethod": "SHA-256"},
+    "dpopKeyPair": {"privateKeyJwk": {"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."},
+                    "publicKeyJwk":  {"kty":"EC","crv":"P-256","x":"...","y":"..."}}
+  }
+}
+```
+
+导入到另一台机器 / 容器：
+
+```bash
+curl -X POST http://<网关>/admin/api/accounts   -H 'Content-Type: application/json'   -H 'X-Admin-Password: <管理密码>'   -d '{"action":"session-json","name":"portable","session_json":"<粘贴上面整段 JSON>"}'
+```
+
+或在控制台「账号 → 从 session JSON 导入」粘贴。
+
+> ⚠️ **这份 JSON 等同于账号登录态。** 含 `refresh_token`（约 30 天）与 DPoP 私钥，
+> 拿到它就能以你的身份调用上游。请勿提交到版本库、勿外传、勿贴到聊天里。
+> 用完后删掉。
+>
+> 另外：`codearts2api-data.json` 里本来就缓存着同样的材料（IDE 关闭时续期用），
+> 所以导出并不会让暴露面变大 —— 但**别把它复制得到处都是**。
+
+### 3.3 本地浏览器登录（OAuth 回调）
 
 控制台「账号」页点 **浏览器登录（本机回调）** 即可。网关做的事：
 
@@ -332,7 +384,7 @@ go run ./cmd/probe -dump-keys   # 只列出 state.vscdb 里 ItemTable 的全部�
 > ⚠️ 回调地址是 `127.0.0.1`，所以**浏览器必须与网关在同一台机器上**。
 > 容器 / 远程部署请改用「桌面端导入」或「session JSON 导入」。
 
-### 3.3 续期策略
+### 3.4 续期策略
 
 STS 临时凭证只有约 2 小时有效期。网关按下面的优先级解析：
 
@@ -355,13 +407,16 @@ STS 临时凭证只有约 2 小时有效期。网关按下面的优先级解析�
 
 长度超出时按设计跳过（返回 `ErrWriteBackSkipped`），网关仍用自己保存的凭据正常工作。
 
-### 3.4 跨平台 / Docker
+### 3.5 跨平台 / Docker
 
 DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读取桌面端凭据。
 此时有两种方式：
 
-1. 控制台「手工录入」：填 STS 临时 AK / SK / Security Token
-2. 控制台「从 session JSON 导入」：粘贴解密后的 session JSON（含 refresh_token 与 DPoP 私钥，可续期）
+1. **从 session JSON 导入**（推荐）—— 在 Windows 机器上按 [3.2](#32-导出-session-json)
+   导出，粘贴过来即可；带着 refresh_token 与 DPoP 私钥，**导入后仍能自动续期**
+2. **手工录入** —— 填 STS 临时 AK / SK / Security Token；只能活约 2 小时，之后需要重新填
+
+> 容器部署时 `docker-compose.yml` 已带 `-no-import`，不会去扫桌面端目录。
 
 ---
 
@@ -370,7 +425,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 <http://127.0.0.1:10087/>，单文件、无外部依赖、可离线使用。
 
 - **概览**：请求统计、今日免费额度进度条、今日签到 n/m、**活动福利列表与邀请链接**、模型清单（含通道与积分倍率）、一键刷新模型
-- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / 探活 / **签到** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日签到」状态
+- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **签到** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日签到」状态
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` 允许无密钥调用）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
 - **设置**：默认 / 强制模型、**允许积分模型开关**、**每日自动签到开关与时刻**、
@@ -396,7 +451,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/admin/api/state` | 首屏状态（账号 / 密钥 / 模型 / 设置 / 统计 / 额度 / 今日签到） |
-| POST | `/admin/api/accounts` | 账号操作：`import` / `manual` / `session-json` / `remove` / `toggle` / `clear-errors` / `reimport` |
+| POST | `/admin/api/accounts` | 账号操作：`import` / `manual` / **`export`** / `session-json` / `remove` / `toggle` / `clear-errors` / `reimport` |
 | GET/POST/DELETE | `/admin/api/keys` | API 密钥增删改查 |
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
