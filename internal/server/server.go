@@ -88,11 +88,11 @@ func (s *Server) Handler() http.Handler {
 
 // withCORS 处理跨域。
 //
-// 默认只放行本机来源（localhost / 127.0.0.1 / [::1]，任意端口）；
-// 需局域网访问时在设置里显式列出逗号分隔的来源。不提供通配符。
+// 默认只放行**同源**请求（即控制台自己的页面）；需要别的来源时在设置里
+// 显式列出（逗号分隔）。不提供通配符。
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		allowed := s.corsOrigin(r.Header.Get("Origin"))
+		allowed := s.corsOrigin(r)
 		writeCORSHeaders(w, allowed)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -115,7 +115,12 @@ func writeCORSHeaders(w http.ResponseWriter, allowed string) {
 }
 
 // corsOrigin 返回应当回给浏览器的 Allow-Origin 值，空串表示不放行。
-func (s *Server) corsOrigin(raw string) string {
+//
+// 默认只放行**同源**：以前默认放行 localhost / 127.0.0.1 / [::1] 的任意端口，
+// 等于让本机随便一个 Web 服务都能读到 /admin/api/* 的响应（含导出登录态）。
+// 需要跨来源时在设置里显式列出。
+func (s *Server) corsOrigin(r *http.Request) string {
+	raw := r.Header.Get("Origin")
 	if raw == "" || raw == "null" {
 		return ""
 	}
@@ -132,13 +137,11 @@ func (s *Server) corsOrigin(raw string) string {
 		}
 		return ""
 	}
-	if !isLoopbackHost(u.Hostname()) {
-		return ""
+	// 同源（浏览器对同源 POST 也会带 Origin）：回显即可
+	if strings.EqualFold(u.Host, r.Host) {
+		return raw
 	}
-	if port := u.Port(); port != "" {
-		return u.Scheme + "://" + net.JoinHostPort(u.Hostname(), port)
-	}
-	return u.Scheme + "://" + u.Hostname()
+	return ""
 }
 
 // hasWildcard 报告字符串是否含通配符字符。
