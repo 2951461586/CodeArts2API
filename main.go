@@ -88,6 +88,11 @@ func main() {
 	srv := server.New(st)
 	srv.ApplyIdentity()
 
+	// 后台每日自动签到（领取免费福利 Token）
+	claimCtx, stopClaim := context.WithCancel(context.Background())
+	defer stopClaim()
+	srv.StartClaimLoop(claimCtx)
+
 	// 后台刷新一次模型清单（不阻塞启动）
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

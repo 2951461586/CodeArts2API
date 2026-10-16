@@ -174,6 +174,10 @@ type Account struct {
 	LastErr  string `json:"last_err,omitempty"`
 	LastUsed int64  `json:"last_used"`
 	Note     string `json:"note,omitempty"`
+	// 每日免费福利 Token 的签到记录（按本地日期去重）
+	LastClaimDate string `json:"last_claim_date,omitempty"`
+	LastClaimAt   int64  `json:"last_claim_at,omitempty"`
+	LastClaimErr  string `json:"last_claim_err,omitempty"`
 	// 缓存的凭据（含 refresh_token 与 DPoP 私钥），用于 IDE 未运行时的续期
 	Session *Session `json:"session,omitempty"`
 }

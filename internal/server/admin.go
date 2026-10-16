@@ -14,6 +14,7 @@ import (
 
 // handleAdminState 返回控制台首屏所需的全部状态。
 func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
+	today := time.Now().Format("2006-01-02")
 	accts := s.Store.Accounts()
 	safe := make([]map[string]any, 0, len(accts))
 	for _, a := range accts {
@@ -22,6 +23,9 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			"user_data": a.UserData, "enabled": a.Enabled,
 			"status": a.Status, "note": a.Note, "last_err": a.LastErr,
 			"failures": a.Failures, "last_used": a.LastUsed,
+			"last_claim_date": a.LastClaimDate, "last_claim_at": a.LastClaimAt,
+			"last_claim_err": a.LastClaimErr,
+			"claimed_today":  a.LastClaimDate == today,
 		}
 		if a.Session != nil {
 			row["access_key"] = codearts.Mask(a.Session.AccessKey)
@@ -47,6 +51,7 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 	s.cache.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
+		"today":          today,
 		"accounts":       safe,
 		"keys":           safeKeys,
 		"models":         s.Reg.List(s.Store.Settings().ModelAliases),

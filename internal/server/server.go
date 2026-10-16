@@ -20,10 +20,11 @@ import (
 
 // Server 是网关 HTTP 服务。
 type Server struct {
-	Store *store.Store
-	Up    *codearts.Client
-	Cred  *codearts.Manager
-	Reg   *registry.Registry
+	Store  *store.Store
+	Up     *codearts.Client
+	Cred   *codearts.Manager
+	Reg    *registry.Registry
+	Logins *codearts.LoginManager
 
 	// 上游模型清单 / 额度的内存缓存
 	cache *modelCache
@@ -36,6 +37,7 @@ func New(st *store.Store) *Server {
 	s.Cred = codearts.NewManager(up)
 	s.Cred.Persist = func(*codearts.Account) error { return st.Save() }
 	s.Cred.Logf = log.Printf
+	s.Logins = codearts.NewLoginManager(up)
 	return s
 }
 
@@ -66,6 +68,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/checkin", s.withAdminAuth(s.handleAdminCheckin))
 	mux.HandleFunc("/admin/api/models/refresh", s.withAdminAuth(s.handleAdminRefreshModels))
 	mux.HandleFunc("/admin/api/balance", s.withAdminAuth(s.handleAdminBalance))
+	mux.HandleFunc("/admin/api/claim", s.withAdminAuth(s.handleAdminClaim))
+	mux.HandleFunc("/admin/api/login/start", s.withAdminAuth(s.handleAdminLoginStart))
+	mux.HandleFunc("/admin/api/login/poll", s.withAdminAuth(s.handleAdminLoginPoll))
+	mux.HandleFunc("/admin/api/login/cancel", s.withAdminAuth(s.handleAdminLoginCancel))
 
 	mux.HandleFunc("/", s.handleRoot)
 
@@ -275,6 +281,9 @@ func sanitizedSettings(st store.Settings) map[string]any {
 		"cors_origin":         st.CORSOrigin,
 		"auto_refresh":        st.AutoRefresh,
 		"allow_credit_models": st.AllowCreditModels,
+		"auto_claim":          st.AutoClaim,
+		"claim_after_hour":    st.ClaimAfterHour,
+		"claim_after_minute":  st.ClaimAfterMinute,
 		"write_back_to_ide":   st.WriteBackToIDE,
 		"live_ttl_sec":        st.LiveTTLSeconds,
 		"user_data_dir":       st.UserDataDir,

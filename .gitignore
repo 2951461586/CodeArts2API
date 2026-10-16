@@ -9,6 +9,10 @@ codearts2api-data.json.tmp
 *.codearts2api.bak
 *.codearts2api.tmp
 
+# 本地临时文件
+/port.txt
+/sid.txt
+
 # 逆向中间产物
 .recon/
 __pycache__/

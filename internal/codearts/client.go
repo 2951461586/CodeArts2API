@@ -37,6 +37,8 @@ const (
 	BuiltinModelsPath = "/v1/model/builtin"
 	// BenefitGatewayConfigPath 报告 benefit 通道是否开放。
 	BenefitGatewayConfigPath = "/v1/benefit-gateway-config"
+	// BenefitClaimPath 是每日免费福利 Token 的领取入口（幂等 GET）。
+	BenefitClaimPath = "/api/v1/benefit/claim"
 
 	// PluginName / PluginVersion 等身份头，服务端会据此做路由与埋点。
 	// 缺省值与 CodeArts Agent 26.9.902 一致。

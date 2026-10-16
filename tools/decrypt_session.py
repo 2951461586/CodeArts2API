@@ -78,8 +78,23 @@ def load_session(user_data: str) -> dict:
         con.close()
     if not row:
         raise SystemExit("未找到 HuaweiCloudSession，请先在 CodeArts Agent 里登录")
-    raw = bytes(json.loads(row[0])["data"])
-    return json.loads(aes_gcm_decrypt(key, raw))
+    return json.loads(aes_gcm_decrypt(key, decode_secret_payload(row[0])))
+
+
+def decode_secret_payload(cell) -> bytes:
+    """把 ItemTable 里的值还原成 OSCrypt 密文。
+
+    VS Code 在两种写法之间来回切换过，两种都要支持：
+        {"type":"Buffer","data":[118,49,48,...]}       # 字节数组
+        {"type":"Buffer","data":"djEw..."}             # base64 字符串
+    该列本身也可能是 TEXT 或 BLOB。
+    """
+    if isinstance(cell, (bytes, bytearray)):
+        cell = bytes(cell).decode("utf-8")
+    data = json.loads(cell)["data"]
+    if isinstance(data, str):
+        return base64.b64decode(data)
+    return bytes(data)
 
 
 def default_user_data() -> str:

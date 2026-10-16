@@ -163,6 +163,19 @@ function y(O){ ... N.push(M.toLowerCase()); return N.sort(), N }
   value {"type":"Buffer","data":[118,49,48,...]}   # "v10" + nonce(12) + AES-256-GCM(ct||tag)
 ```
 
+#### 载荷有两种写法（VS Code 改过）
+
+实测同一台机器上，`ItemTable` 里的值在两种格式之间出现过：
+
+```jsonc
+{"type":"Buffer","data":[118,49,48, ...]}     // 字节数组（早期）
+{"type":"Buffer","data":"djEwupakP/REo1+c..."} // base64 字符串（后来）
+```
+
+两种都要支持。Go 的 `encoding/json` 把 JSON 字符串解到 `[]byte` 时**自动按 base64 解码**，
+数组形式也能直接解，所以 `Data []byte` 一个字段就同时兼容两种写法 —— 这是
+`session_windows.go` 至今没被这个变更打挂的原因。该列本身也可能是 TEXT 或 BLOB。
+
 解密后的 session 结构：
 
 ```json
@@ -230,6 +243,43 @@ GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin
 **"不与积分包互通"这一条决定了网关的设计**：两条通道必须严格隔离，
 且**无法识别的模型名要默认落到免费通道** —— 宁可报 4005，也不能静默扣积分。
 
+#### 领取接口（每日签到）
+
+复刻 `out/extension.js` 的 `B3c()`：
+
+```js
+function Uce(){ return Iz()
+  ? { claim:"https://snapengine-apig.cn-north-7.myhuaweicloud.com/api/v1/benefit/claim", ... }
+  : { claim:"opengw.developer.huaweicloud.com/api/v1/benefit/claim", ... } }
+
+async function B3c(){
+  const [t,e,r] = await Promise.all([ getBenefitGatewayConfig(), getEducationGatewayConfig(), getExaminationGatewayConfig() ]);
+  if (t) {                                    // benefit 通道开放才领
+    const s = Uce().claim;
+    const o = Iz() ? await U5(s,"GET","getClaimBenefit",n.host) : await q5("GET",s,"getClaimBenefit");
+    ...
+  }
+  if (e) { ... claim with {channel:"education"} ... }
+  if (r) { ... examination ... }
+}
+```
+
+实测（商业版）：
+
+```text
+GET https://opengw.developer.huaweicloud.com/v1/benefit-gateway-config
+  → 200 {"enabled":true,"is_examination_domain":false,"examination_model_enable":false}
+
+GET https://opengw.developer.huaweicloud.com/api/v1/benefit/claim
+  → 200 {"error_code":"0000","error_msg":"success",
+         "result":{"channel":"codearts","domain_id":"...","user_id":"...",
+                   "user_name":"hid_xxx","create_time":...,"update_time":...}}
+```
+
+**领取是幂等的**：当天已领过再领一次仍返回 `0000 success`，额度不变。
+因此网关的「每日自动签到」可以放心地按本地日期轮询执行，
+重复调用没有副作用。
+
 #### 3.7.2 两条通道：`maas_type` 决定路由与计费
 
 上游用请求头 `maas_type` 区分两条完全不同的通道 —— 同一个模型名在不同通道下
@@ -277,7 +327,69 @@ body.model = "glm-5.3 "（尾随空格）
 上游会校验 `model-id` 请求头与请求体里的 `model` **完全相等**，
 因此网关改写模型名时必须两处同步。
 
-### 3.8 续期流程（代码已确认，未实跑）
+### 3.8 本地浏览器登录（OAuth 2.0 授权码 + PKCE + DPoP）
+
+复刻 `extensions/huaweicloud.authentication/dist/plugin.js`。
+
+**授权 URL**（`buildLoginUrl`）：
+
+```js
+const a = `&ticket_id=${ticketId}&plugin-name=${LOGIN_PLUGIN_NAME}&plugin-version=${EXTENSION_VERSION}`;
+return `${getPortalHost()}/authorize?theme=${themeKind}&locale=${env.language}` +
+       `&uri_scheme=${CLIENT_ID}&client_id=${CLIENT_ID}&port=${port}` +
+       `&code_challenge=${t.codeChallenge}&code_challenge_method=${t.codeChallengeMethod}${a}`;
+```
+
+| 参数 | 取值 |
+| --- | --- |
+| `getPortalHost()` | `https://codearts.huaweicloud.com/portal`（国际站 `https://codearts.ap-southeast-1.huaweicloud.com/portal`） |
+| `CLIENT_ID` | `codearts-agent`（= `product.json` 的 `urlProtocol`） |
+| `LOGIN_PLUGIN_NAME` | `snap_AIIDE` |
+| `code_challenge_method` | `SHA-256` |
+| `ticket_id` | `WordArray.random(32).toString(hex)` → 64 位十六进制 |
+| `port` | 本地回调端口，**≥10000**（低于则重新随机） |
+
+PKCE 的 `code_verifier` = `WordArray.random(32).toString(hex)`（64 位 hex），
+`code_challenge` = base64url(SHA-256(verifier))。
+
+**回调服务器**（express，只监听 `127.0.0.1`）：
+
+```js
+app.get("/oauth/callback", async (req, res) => {
+  const secret = req.query.secret, redirect = req.query.redirect;
+  if (secret && redirect) { this.secret = secret; res.redirect(307, redirect); return; }
+  const code = req.query.code;
+  if (code) {
+    this.authorizationCode = code;
+    res.redirect(307, `${portalHost}/login?login_succeed=true&uri_scheme=codearts-agent&locale=...`);
+  } else {
+    res.redirect(307, `${portalHost}/login?login_succeed=false&...`);
+  }
+});
+```
+
+注意是**两跳**：先 `?secret=&redirect=`（门户校验后跳转），再 `?code=`（真授权码）。
+
+**换凭据**（`getTokenByAuthenticationCode` → `requestToken`）：
+
+```js
+{ client_id: "codearts-agent",
+  code: <authorizationCode>,
+  code_verifier: <pkcePair.codeVerifier>,
+  grant_type: "authorization_code",
+  redirect_uri: `http://127.0.0.1:${port}/oauth/callback` }
+// POST https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens
+// header: DPoP: <ES256 JWS，htm=POST，htu=上面的 URL>
+```
+
+实测：网关按上述格式发起请求，STS 返回
+`STS5.1805 invalid authorization code`（因为用的是假 code）——
+说明请求格式已被服务端正确解析，链路是通的。
+
+登录成功后可再调 `GET https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity`
+补全账号名与 domain id（`getUserInfo()` 用的就是这个）。
+
+### 3.9 续期流程（代码已确认，未实跑）
 
 `extensions/huaweicloud.authentication/dist/plugin.js`
 
@@ -392,6 +504,8 @@ CodeArts2API/
 | §3.7.2 两条通道路由 | `registry.go` + `client.go` | `TestChannelRouting` |
 | §3.7.3 glm-5.3 只支持流式 | `codearts/sse.go` + `server/chat.go` | `TestAggregateSSE*`、`TestIsEmptyRejection` |
 | §7.10 并发上限属临时故障 | `codearts/sse.go` + `server/chat.go` | `TestIsTransientUpstream` |
+| §3.7.1 每日签到接口 | `codearts/benefit.go` + `server/claim.go` | `TestDescribeClaimError` |
+| §3.8 浏览器登录 | `codearts/login.go` + `server/login.go` | `TestPKCEPairShape`、`TestBuildAuthorizeURL`、`TestLoginCallbackTwoHops`、`TestListenCallbackPortInRange` |
 | §3.8 DPoP 密钥绑定 | `refresh.go` | `TestJWKThumbprintMatchesRefreshTokenBinding`（比对 `cnf.jkt`） |
 | 回写安全性 | `sqlite.go` + `session_windows.go` | `TestPatchItemValueRoundTrip`、`TestWriteBackSessionRoundTrip` |
 

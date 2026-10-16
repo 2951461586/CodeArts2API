@@ -39,6 +39,12 @@ type Settings struct {
 	// AllowCreditModels 允许调用走积分（计费）通道的模型，如 GLM-5.3。
 	// 关闭后只放行免费权益通道的模型。
 	AllowCreditModels bool `json:"allow_credit_models"`
+	// AutoClaim 每天自动领取免费福利 Token（幂等，重复领不报错）。
+	AutoClaim bool `json:"auto_claim"`
+	// ClaimAfterHour / ClaimAfterMinute 是每天开始签到的本地时刻。
+	// 福利 Token 当日 24:00 清零，所以默认 00:05 领。
+	ClaimAfterHour   int `json:"claim_after_hour"`
+	ClaimAfterMinute int `json:"claim_after_minute"`
 	// WriteBackToIDE 允许把续期结果回写 state.vscdb。
 	WriteBackToIDE bool `json:"write_back_to_ide"`
 	// LiveTTLSeconds 是重读 IDE 会话的缓存时长。
@@ -105,6 +111,9 @@ func DefaultSettings() Settings {
 		CORSOrigin:        "",
 		AutoRefresh:       true,
 		AllowCreditModels: true,
+		AutoClaim:         true,
+		ClaimAfterHour:    0,
+		ClaimAfterMinute:  5,
 		WriteBackToIDE:    true,
 		LiveTTLSeconds:    10,
 		PluginName:        codearts.PluginName,
@@ -154,6 +163,12 @@ func (s *Store) applyDefaults() {
 	}
 	if st.LiveTTLSeconds <= 0 {
 		st.LiveTTLSeconds = def.LiveTTLSeconds
+	}
+	if st.ClaimAfterHour < 0 || st.ClaimAfterHour > 23 {
+		st.ClaimAfterHour = def.ClaimAfterHour
+	}
+	if st.ClaimAfterMinute < 0 || st.ClaimAfterMinute > 59 {
+		st.ClaimAfterMinute = def.ClaimAfterMinute
 	}
 	if st.PluginName == "" {
 		st.PluginName = def.PluginName
@@ -305,6 +320,28 @@ func (s *Store) MarkAccountResult(id string, ok bool, note string) {
 			a.Failures++
 			a.Status = "error"
 			a.LastErr = note
+		}
+		return
+	}
+}
+
+// MarkClaimResult 记录一次每日签到结果。
+//
+// ok 为真时记下日期（同一天不会重复签），失败时只记错误、不写日期，
+// 这样下一轮（5 分钟后）还会重试。
+func (s *Store) MarkClaimResult(id, date string, ok bool, msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID != id {
+			continue
+		}
+		a.LastClaimAt = time.Now().Unix()
+		if ok {
+			a.LastClaimDate = date
+			a.LastClaimErr = ""
+		} else {
+			a.LastClaimErr = msg
 		}
 		return
 	}
