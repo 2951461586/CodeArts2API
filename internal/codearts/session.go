@@ -88,17 +88,20 @@ func (s *Session) RawJSON() ([]byte, error) {
 //
 // 只在缺失时补齐 —— 已存在的字段一律不动，否则会改变序列化后的长度，
 // 影响 writeBackSession 的「同长度原地覆写」。
+//
+// m 里的嵌套 map 与 s.raw 共享，所以这里先浅拷贝再补字段：直接改会污染
+// 原始会话，并发导出 / 回写时就是数据竞争。
 func (s *Session) ensureLoginContext(m map[string]any) {
-	lc, _ := m["loginContext"].(map[string]any)
-	if lc == nil {
-		lc = map[string]any{}
+	lc := map[string]any{}
+	for k, v := range nested(m, "loginContext") {
+		lc[k] = v
 	}
 	if _, ok := lc["pkcePair"]; !ok && s.CodeVerifier != "" {
 		lc["pkcePair"] = map[string]any{"codeVerifier": s.CodeVerifier}
 	}
-	pair, _ := lc["dpopKeyPair"].(map[string]any)
-	if pair == nil {
-		pair = map[string]any{}
+	pair := map[string]any{}
+	for k, v := range nested(lc, "dpopKeyPair") {
+		pair[k] = v
 	}
 	if _, ok := pair["privateKeyJwk"]; !ok {
 		pair["privateKeyJwk"] = json.RawMessage(s.DPoPPrivateJWK)

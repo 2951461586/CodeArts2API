@@ -35,7 +35,12 @@ func New(st *store.Store) *Server {
 	up := codearts.NewClient()
 	s := &Server{Store: st, Up: up, Reg: registry.New(), cache: newModelCache()}
 	s.Cred = codearts.NewManager(up)
-	s.Cred.Persist = func(*codearts.Account) error { return st.Save() }
+	// 凭据解析拿到的是账号快照，所以续期 / 跟随 IDE 得到的新会话必须显式写回 store，
+	// 否则只对那一次请求生效（IDE 关闭后就再也拿不到）。
+	s.Cred.Persist = func(a *codearts.Account) error {
+		st.SetAccountSession(a.ID, a.Session)
+		return st.Save()
+	}
 	s.Cred.Logf = log.Printf
 	s.Logins = codearts.NewLoginManager(up)
 	return s

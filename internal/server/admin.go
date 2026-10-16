@@ -150,18 +150,18 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": ok})
 
 	case "toggle":
-		if a := s.Store.Account(body.ID); a != nil {
-			a.Enabled = !a.Enabled
-			_ = s.Store.Save()
+		a := s.Store.Account(body.ID)
+		if a == nil {
+			writeErr(w, http.StatusBadRequest, "账号不存在", "invalid_request_error")
+			return
 		}
+		s.Store.SetAccountEnabled(a.ID, !a.Enabled)
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 
 	case "clear-errors":
-		if a := s.Store.Account(body.ID); a != nil {
-			a.Failures = 0
-			a.Status = "ok"
-			a.LastErr = ""
-			_ = s.Store.Save()
+		if s.Store.ClearAccountErrors(body.ID) {
+			s.persist()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 

@@ -255,31 +255,58 @@ func (s *Store) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// --- 账号 ---
+// cloneAccount 返回账号的浅拷贝。
+//
+// 对外只暴露拷贝：Account 的字段（Enabled / Status / Failures / LastErr / Session…）
+// 会被请求路径（MarkAccountResult）与控制台并发读写，直接把内部指针交出去
+// 就是数据竞争。Session 指针可以共享 —— 会话构造完成后不再原地修改，
+// 续期时是整体替换指针。
+func cloneAccount(a *codearts.Account) *codearts.Account {
+	if a == nil {
+		return nil
+	}
+	cp := *a
+	return &cp
+}
 
-// Accounts 返回账号快照（浅拷贝，元素仍是原指针）。
-func (s *Store) Accounts() []*codearts.Account {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*codearts.Account, len(s.st.Accounts))
-	copy(out, s.st.Accounts)
+// cloneAccounts 批量浅拷贝。
+func cloneAccounts(in []*codearts.Account) []*codearts.Account {
+	out := make([]*codearts.Account, len(in))
+	for i, a := range in {
+		out[i] = cloneAccount(a)
+	}
 	return out
 }
 
-// Account 按 ID 查找账号。
+// --- 账号 ---
+
+// Accounts 返回账号快照（元素是浅拷贝，可直接并发读取）。
+func (s *Store) Accounts() []*codearts.Account {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneAccounts(s.st.Accounts)
+}
+
+// Account 按 ID 查找账号，返回快照。
 func (s *Store) Account(id string) *codearts.Account {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, a := range s.st.Accounts {
 		if a.ID == id {
-			return a
+			return cloneAccount(a)
 		}
 	}
 	return nil
 }
 
 // UpsertAccount 按 UserData / AK 去重后写入账号。
+//
+// 入库时拷贝一份：store 拥有自己的副本，调用方之后对入参的修改不会绕过锁
+// 偷偷改到 store 内部状态。
 func (s *Store) UpsertAccount(a *codearts.Account) bool {
+	if a == nil {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, ex := range s.st.Accounts {
@@ -288,11 +315,11 @@ func (s *Store) UpsertAccount(a *codearts.Account) bool {
 			ex.Session.AccessKey != "" && ex.Session.AccessKey == a.Session.AccessKey
 		if sameDir || sameAK {
 			a.ID = ex.ID
-			s.st.Accounts[i] = a
+			s.st.Accounts[i] = cloneAccount(a)
 			return false
 		}
 	}
-	s.st.Accounts = append(s.st.Accounts, a)
+	s.st.Accounts = append(s.st.Accounts, cloneAccount(a))
 	return true
 }
 
@@ -309,7 +336,7 @@ func (s *Store) RemoveAccount(id string) bool {
 	return false
 }
 
-// NextAccount 以轮询方式挑一个可用账号。
+// NextAccount 以轮询方式挑一个可用账号，返回快照。
 //
 // 连续失败过多的账号会被跳过；全部不可用时回退到失败最少的那个，
 // 保证不会硬阻塞请求。
@@ -332,11 +359,58 @@ func (s *Store) NextAccount() *codearts.Account {
 		}
 		if a.Failures == 0 {
 			s.rotate = (idx + 1) % n
-			return a
+			return cloneAccount(a)
 		}
 	}
 	s.rotate = (s.rotate + 1) % n
-	return best
+	return cloneAccount(best)
+}
+
+// SetAccountEnabled 启用 / 停用账号（在锁内修改，避免与控制台读取竞争）。
+func (s *Store) SetAccountEnabled(id string, enabled bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID == id {
+			a.Enabled = enabled
+			return true
+		}
+	}
+	return false
+}
+
+// ClearAccountErrors 清零失败计数与错误状态。
+func (s *Store) ClearAccountErrors(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID == id {
+			a.Failures = 0
+			a.Status = "ok"
+			a.LastErr = ""
+			return true
+		}
+	}
+	return false
+}
+
+// SetAccountSession 用新的会话替换账号上缓存的凭据（续期 / 跟随 IDE 时调用）。
+//
+// 凭据解析走的是快照，所以 Manager 拿到新会话后必须通过这里写回，
+// 否则续期结果只存在于那次请求里。
+func (s *Store) SetAccountSession(id string, sess *codearts.Session) bool {
+	if sess == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID == id {
+			a.Session = sess
+			return true
+		}
+	}
+	return false
 }
 
 // MarkAccountResult 记录一次账号调用结果。

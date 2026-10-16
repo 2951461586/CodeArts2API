@@ -87,7 +87,7 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 		}
 	}
 	if live != nil && live.Valid(opt.Margin) {
-		m.adopt(acct, live, false)
+		m.adopt(acct, live)
 		return live, nil
 	}
 
@@ -124,7 +124,7 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 	updated.Source = "refresh"
 	m.logf("账号 %s 续期成功，新凭据有效期至 %s", acct.DisplayName(), res.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
 
-	m.adopt(acct, &updated, true)
+	m.adopt(acct, &updated)
 	m.liveSess[acct.ID] = &updated
 	m.liveAt[acct.ID] = time.Now()
 
@@ -151,14 +151,17 @@ func (m *Manager) cachedLive(acct *Account, ttl time.Duration) *Session {
 	return m.liveSess[acct.ID]
 }
 
-// adopt 把新会话写回账号对象；notify 为真时触发持久化回调。
-func (m *Manager) adopt(acct *Account, s *Session, notify bool) {
+// adopt 把新会话记到账号快照上；凭据真的变了就通知持久化。
+//
+// 凭据轮换（IDE 自行续期、网关自行续期）大约每 2 小时一次，changed 为假时
+// 不会触发落盘，因此这里不会造成写盘风暴。
+func (m *Manager) adopt(acct *Account, s *Session) {
 	changed := acct.Session == nil ||
 		acct.Session.AccessKey != s.AccessKey ||
 		acct.Session.SecurityToken != s.SecurityToken ||
 		acct.Session.RefreshToken != s.RefreshToken
 	acct.Session = s
-	if changed && notify && m.Persist != nil {
+	if changed && m.Persist != nil {
 		if err := m.Persist(acct); err != nil {
 			m.logf("账号 %s 状态保存失败: %v", acct.DisplayName(), err)
 		}
