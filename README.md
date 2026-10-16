@@ -529,11 +529,17 @@ Anthropic 侧映射为 `thinking` 内容块。
 | 上游并发会话打满 / 429 限流 | `429` | `rate_limit_error` | `rate_limit_error` |
 | 请求参数或模型名不合法（含上游 `200 + error_code`） | `400` | `invalid_request_error` | `invalid_request_error` |
 | 模型不存在 | `404` | `invalid_request_error` | `invalid_request_error` |
-| 上游 5xx / 网络 / 凭据不可用 | `502` | `upstream_error` | `overloaded_error` |
+| 上游 5xx / 网络错误 | `502` | `upstream_error` | `overloaded_error` |
+| **账号登录态失效**（凭据过期且无法续期） | `502` | `credentials_error` | `authentication_error` |
 | 账号池为空 | `503` | `server_error` | `overloaded_error` |
 
 > 上游把「并发会话数已达上限」表达为 `HTTP 400 + TM.00001041`，网关会先按
 > 临时性故障**退避重试**（不计入账号失败），重试仍失败才回 `429`。
+>
+> **账号登录态失效**是唯一需要人工介入的错误：网关会把上游的错误码
+> （`STS5.1806` / `invalid_grant` / `APIG.0301` …）翻译成一句人话，
+> 并明确提示「请重新登录 CodeArts Agent」。它**不会**报成
+> `overloaded_error`，以免误导客户端反复重试。
 
 ---
 

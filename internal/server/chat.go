@@ -425,6 +425,10 @@ func statusOf(err error) int {
 
 // errorTypeOf 返回 OpenAI 风格的错误 type（与 statusOf 配套）。
 func errorTypeOf(err error) string {
+	// 凭据不可用必须与上游故障区分开：重试没有意义，用户得重新登录。
+	if codearts.IsCredentialsError(err) {
+		return "credentials_error"
+	}
 	switch statusOf(err) {
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"

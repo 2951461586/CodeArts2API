@@ -103,17 +103,23 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 	}
 	if !opt.AllowRefresh || fresh == nil || !fresh.HasRefresh() {
 		if live != nil {
-			return nil, fmt.Errorf("账号 %s 的凭据已过期（%s），请在 CodeArts Agent 里重新登录",
-				acct.DisplayName(), live.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
+			return nil, &CredentialsError{
+				Account: acct.DisplayName(),
+				Reason: fmt.Sprintf("凭据已于 %s 过期，且没有可用的续期材料（缺 refresh_token / DPoP 私钥 / PKCE verifier）",
+					live.ExpiresAt.Local().Format("2006-01-02 15:04:05")),
+			}
 		}
-		return nil, fmt.Errorf("账号 %s 没有可用凭据，请先在 CodeArts Agent 里登录，或在控制台手工录入",
-			acct.DisplayName())
+		return nil, &CredentialsError{Account: acct.DisplayName(), Reason: "没有可用凭据"}
 	}
 
 	m.logf("账号 %s 凭据已过期，尝试用 refresh_token 续期", acct.DisplayName())
 	res, err := m.Client.Refresh(ctx, fresh)
 	if err != nil {
-		return nil, fmt.Errorf("账号 %s 续期失败: %w", acct.DisplayName(), err)
+		return nil, &CredentialsError{
+			Account: acct.DisplayName(),
+			Reason:  "自动续期失败：" + DescribeRefreshError(err),
+			Err:     err,
+		}
 	}
 	updated := *fresh
 	updated.AccessKey = res.AccessKey

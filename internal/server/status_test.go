@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -57,6 +58,9 @@ func TestErrorTypeOfMatchesStatus(t *testing.T) {
 		{&codearts.UpstreamError{Status: http.StatusOK, Message: "4005: bad"}, "invalid_request_error"},
 		{errNoAccount, "server_error"},
 		{errors.New("boom"), "upstream_error"},
+		// 凭据不可用：重试没意义，必须与上游故障区分开
+		{&codearts.CredentialsError{Account: "a", Reason: "已过期"}, "credentials_error"},
+		{fmt.Errorf("包装: %w", &codearts.CredentialsError{Account: "a"}), "credentials_error"},
 	}
 	for _, c := range cases {
 		if got := errorTypeOf(c.err); got != c.want {
@@ -79,5 +83,21 @@ func TestAnthropicErrorType(t *testing.T) {
 		if got := anthropicErrorType(status); got != want {
 			t.Errorf("anthropicErrorType(%d) = %q，期望 %q", status, got, want)
 		}
+	}
+}
+
+// TestAnthropicErrorTypeOfCredentials 凭据失效不应报成 overloaded_error
+// （那会暗示客户端重试，而实际只能重新登录）。
+func TestAnthropicErrorTypeOfCredentials(t *testing.T) {
+	ce := &codearts.CredentialsError{Account: "a", Reason: "已过期"}
+	if got := anthropicErrorTypeOf(ce); got != "authentication_error" {
+		t.Errorf("anthropicErrorTypeOf(CredentialsError) = %q，期望 authentication_error", got)
+	}
+	// 其它错误仍走状态码映射
+	if got := anthropicErrorTypeOf(errNoAccount); got != "overloaded_error" {
+		t.Errorf("anthropicErrorTypeOf(errNoAccount) = %q，期望 overloaded_error", got)
+	}
+	if got := anthropicErrorTypeOf(&codearts.UpstreamError{Status: http.StatusBadRequest, Message: "TM.00001041"}); got != "rate_limit_error" {
+		t.Errorf("并发上限应仍是 rate_limit_error，got %q", got)
 	}
 }
