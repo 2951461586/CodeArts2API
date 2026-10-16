@@ -3,8 +3,8 @@
 > 目标：把本机 **CodeArts Agent**（华为云码道 / CodeArts Doer for Coding）桌面端的
 > 上游模型服务，复刻成一个 OpenAI 兼容网关。
 >
-> 结论：**可行，且比参考项目 Doubao2API 简单** —— 上游本身就是 OpenAI 兼容协议，
-> 不需要像豆包那样把私有补丁流还原成文本。
+> 结论：**可行，且比参考项目 [Doubao2API](https://github.com/2951461586/Doubao2API) 简单** ——
+> 上游本身就是 OpenAI 兼容协议，不需要像豆包那样把私有补丁流还原成文本。
 
 > **本报告已被实现。** 对应代码见仓库根目录的 `internal/codearts/`（凭据 / 签名 / 转发 / 续期）
 > 与 `internal/server/`（OpenAI + Anthropic 兼容层与控制台）；使用方式见 `README.md`。
@@ -211,9 +211,71 @@ GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin
   openpangu-2.0-pro / glm-5.3 / glm-5.2-sft-harmony
 ```
 
-> 注意：`/api/v2/chat/completions` 只认 **benefit 通道**的模型名（`glm-5.3-flash`），
-> 传 `glm-5.3` 会返回 `{"error_code":"4005","error_msg":"unsupported model"}`（HTTP 200）。
-> 不带 `maas_type: benefit` 则 404 `Route missed for model`。
+#### 3.7.1 免费福利 Token 活动（官方口径）
+
+额度接口返回的 `daily_token_limit = 10000000` 对应官方活动
+[限时领取 Tokens](https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html)
+（更新于 2026-09-23）：
+
+| 项目 | 官方说明 |
+| --- | --- |
+| 适用人群 | 所有用户 |
+| 额度 | 每位用户每日 1000 万 Tokens |
+| 清零 | **当日 24:00 清零，不累积至次日** |
+| 领取 | 登录后客户端自动领取（网关复用同一凭据 → 自动共享同一份额度） |
+| 活动模型 | `deepseek-v4.1-flash`、`glm-5.3-flash`、`deepseek-v4-flash-0731`、`deepseek-v4-pro-0813` |
+| 互通性 | **仅消耗福利 Token，不与积分包互通**；额度用尽后这 4 个模型不可再使用 |
+| 条款 | 权益不可转让；违规时官方保留立即取消、作废并收回的权利 |
+
+**"不与积分包互通"这一条决定了网关的设计**：两条通道必须严格隔离，
+且**无法识别的模型名要默认落到免费通道** —— 宁可报 4005，也不能静默扣积分。
+
+#### 3.7.2 两条通道：`maas_type` 决定路由与计费
+
+上游用请求头 `maas_type` 区分两条完全不同的通道 —— 同一个模型名在不同通道下
+是否可用、是否计费都不一样：
+
+| 通道 | 请求头 | 计费 | 模型清单来源 | 实测模型 |
+| --- | --- | --- | --- | --- |
+| **benefit** | `maas_type: benefit` | 消耗福利 Token（每日 1000 万，24:00 清零） | `opengw.developer.huaweicloud.com/api/v1/gateway/config` | `glm-5.3-flash`、`deepseek-v4-pro-0813` … |
+| **credit** | **不带** `maas_type` | 按积分计费 | `snap-access…/v1/model/builtin`（需 `Agent-Type: PromptCenter`） | `glm-5.3`、`GLM-5.2`、`openpangu-2.0-pro` … |
+
+实测矩阵（同一份请求体，只改 `maas_type`）：
+
+```text
+glm-5.3     maas=(none)   -> 400 (空 body)      ← 见 3.7.3
+glm-5.3     maas=benefit  -> 200 {"error_code":"4005","error_msg":"unsupported model"}
+GLM-5.2     maas=(none)   -> 200 正常返回
+GLM-5.2     maas=benefit  -> 200 {"error_code":"4005","error_msg":"unsupported model"}
+openpangu-2.0-pro  maas=(none)  -> 200 正常返回
+glm-5.3     maas=education -> 403 {"error_code":"TM.00001027","error_msg":"未通过学生认证，无法访问教育模型"}
+```
+
+结论：
+- 不带 `maas_type` → **积分（订阅）通道**，可用 `glm-5.3` / `GLM-5.2` / `openpangu-2.0-pro`
+- 带 `maas_type: benefit` → 只认 benefit 清单里的模型名，其余报 `4005`
+- 还有 `education` / `examination` 两条特殊通道（学生认证 / 考试），普通账号用不了
+
+#### 3.7.3 上游怪癖：`glm-5.3` 只支持流式
+
+```text
+glm-5.3  stream=false  -> HTTP 400，body 长度为 0
+glm-5.3  stream=true   -> 200，正常 SSE（含工具调用）
+```
+
+这是目前唯一一个踩到这个坑的模型。网关的应对：检测到「4xx + 空 body」就自动改用
+流式请求，再用本地聚合把分片拼回一次性响应，对客户端保持非流式语义；
+同时把这个模型记为 stream-only，后续直接走流式，不再多打一次空枪。
+
+#### 3.7.4 模型名必须与请求头完全一致
+
+```text
+body.model = "glm-5.3 "（尾随空格）
+-> 406 {"error_code":"InferHub.001001011.406","error_msg":"The model not equals requestHeader's Model-Id"}
+```
+
+上游会校验 `model-id` 请求头与请求体里的 `model` **完全相等**，
+因此网关改写模型名时必须两处同步。
 
 ### 3.8 续期流程（代码已确认，未实跑）
 
@@ -279,7 +341,9 @@ data:{"id":"as-pn2czaefth","object":"chat.completion.chunk",...,"delta":{"role":
 
 ---
 
-## 五、与 Doubao2API 的对照
+## 五、与参考项目 Doubao2API 的对照
+
+参考项目：[Doubao2API](https://github.com/2951461586/Doubao2API)（把豆包工作桌面端复刻成 OpenAI 网关）。
 
 | 维度 | Doubao2API | CodeArts2API（本方案） |
 | --- | --- | --- |
@@ -325,8 +389,8 @@ CodeArts2API/
 | --- | --- | --- |
 | §3.5 签名两个坑 | `signer.go` | `TestCanonicalURIAddsTrailingSlash`、`TestSignRequestStableVector` |
 | §3.6 凭据加密 | `session_windows.go` | `TestReadItemValueFindsSecret` |
-| §3.7.1 两条通道路由 | `registry.go` + `client.go` | `TestChannelRouting` |
-| §3.7.2 glm-5.3 只支持流式 | `codearts/sse.go` + `server/chat.go` | `TestAggregateSSE*`、`TestIsEmptyRejection` |
+| §3.7.2 两条通道路由 | `registry.go` + `client.go` | `TestChannelRouting` |
+| §3.7.3 glm-5.3 只支持流式 | `codearts/sse.go` + `server/chat.go` | `TestAggregateSSE*`、`TestIsEmptyRejection` |
 | §7.10 并发上限属临时故障 | `codearts/sse.go` + `server/chat.go` | `TestIsTransientUpstream` |
 | §3.8 DPoP 密钥绑定 | `refresh.go` | `TestJWKThumbprintMatchesRefreshTokenBinding`（比对 `cnf.jkt`） |
 | 回写安全性 | `sqlite.go` + `session_windows.go` | `TestPatchItemValueRoundTrip`、`TestWriteBackSessionRoundTrip` |

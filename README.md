@@ -6,6 +6,11 @@
 复用桌面端已登录的会话凭据，无需另申请密钥；纯 Go 标准库实现，单文件约 10 MB，
 零外部依赖。
 
+- 🎁 **免费福利 Token** —— 复用官方[限时领取 Tokens](https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html)活动，**每人每日 1000 万 Tokens**
+- 💳 **积分通道** —— 需要时也可调用 `glm-5.3` / `GLM-5.2` 等订阅模型（按积分计费，控制台可一键关闭）
+- 🔌 **双协议** —— `/v1/chat/completions`（OpenAI）+ `/v1/messages`（Anthropic），含思维链与工具调用
+- 🖥️ **内嵌 Web 控制台** —— 账号池 / 密钥 / 日志 / 额度进度 / 模型通道一目了然
+
 ```text
 ┌──────────────┐   /v1/chat/completions   ┌───────────────┐  SDK-HMAC-SHA256 签名   ┌───────────────────────────────────┐
 │ 客户端        │   /v1/messages           │ CodeArts2API  │  + X-Security-token     │ snap-access.cn-north-4.myhuawei   │
@@ -23,27 +28,15 @@
 
 > 逆向过程与全部证据见 [`docs/RECON.md`](docs/RECON.md)。
 
-**目录**：[一、与 Doubao2API 的差别](#一和-doubao2api-的差别) ·
-[二、快速开始](#二快速开始) · [三、模型与两条通道](#三支持的模型与两条通道) ·
-[四、凭据与续期](#四凭据与续期) · [五、控制台](#五控制台) ·
-[六、HTTP 接口](#六http-接口) · [七、工程结构](#七工程结构) ·
-[八、安全说明](#八安全说明) · [九、免责声明](#九免责声明) · [十、许可证](#十许可证)
+**目录**：[一、快速开始](#一快速开始) ·
+[二、模型与两条通道](#二支持的模型与两条通道) · [三、凭据与续期](#三凭据与续期) ·
+[四、控制台](#四控制台) · [五、HTTP 接口](#五http-接口) ·
+[六、工程结构](#六工程结构) · [七、安全说明](#七安全说明) ·
+[八、免责声明](#八免责声明) · [九、许可证](#九许可证)
 
 ---
 
-## 一、和 Doubao2API 的差别
-
-| 维度 | Doubao2API | CodeArts2API |
-| --- | --- | --- |
-| 上游协议 | 私有 SSE（`content_block` 补丁流），需还原 | **OpenAI 原生，零协议转换** |
-| 上游鉴权 | Cookie + CSRF 头 | **华为云 SDK-HMAC-SHA256 + `X-Security-token`** |
-| 凭据有效期 | 长（Cookie） | **约 2 小时（STS 临时凭证），需要续期** |
-| 模型通道 | 单一 | **两条：`maas_type: benefit` 走免费额度，不带则走积分计费** |
-| 凭据加密 | DPAPI + AES-256-GCM | **同源方案（VS Code 的 secret storage 就是 OSCrypt）** |
-
----
-
-## 二、快速开始
+## 一、快速开始
 
 ```bash
 go build -o codearts2api.exe .
@@ -91,19 +84,37 @@ curl http://127.0.0.1:10087/v1/messages \
 
 ---
 
-## 三、支持的模型与两条通道
+## 二、支持的模型与两条通道
 
 CodeArts 上游用请求头 **`maas_type`** 区分两条完全不同的通道 ——
 同一个模型名在不同通道下是否可用、是否计费都不一样：
 
 | 通道 | 请求头 | 计费 | 模型清单来源 |
 | --- | --- | --- | --- |
-| **免费额度**（benefit） | `maas_type: benefit` | 计入每日免费 token 额度 | `GET https://opengw.developer.huaweicloud.com/api/v1/gateway/config` |
+| **免费福利 Token**（benefit） | `maas_type: benefit` | 消耗福利 Token（每日 1000 万，当日 24:00 清零） | `GET https://opengw.developer.huaweicloud.com/api/v1/gateway/config` |
 | **积分**（credit） | **不带** `maas_type` | 按积分计费，真实扣费 | `GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin` |
 
 网关会按模型自动选通道，客户端**不需要关心**这件事。
 
-### 3.1 免费额度通道
+### 2.1 免费福利 Token 活动
+
+CodeArts 官方有一个**限时领取 Tokens** 活动：登录后客户端自动领取，
+**每位用户每日 1000 万 Tokens**。
+
+| 项目 | 说明 |
+| --- | --- |
+| 适用人群 | 所有用户 |
+| 每日额度 | **1000 万 Tokens / 人 / 天** |
+| 清零规则 | **当日 24:00 清零，不累积至次日** |
+| 领取方式 | 登录成功后客户端**自动领取**（本网关复用同一份凭据，因此自动共享同一份额度） |
+| 开始时间 | 码道 IDE / 插件：2026-08-19 22:00<br>桌面端 / 网页端：2026-09-15 00:00<br>小程序：2026-09-17 00:00（均为 UTC+8） |
+| 结束时间 | 另行通知（官方保留随时终止或调整活动的权利） |
+| 活动模型 | `deepseek-v4.1-flash`、`glm-5.3-flash`、`deepseek-v4-flash-0731`、`deepseek-v4-pro-0813` |
+
+> 官方活动页：<https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html>
+> （更新于 2026-09-23）
+
+四个活动模型的规格：
 
 | model_id | 上下文 | 最大输出 |
 | --- | --- | --- |
@@ -112,10 +123,29 @@ CodeArts 上游用请求头 **`maas_type`** 区分两条完全不同的通道 �
 | `deepseek-v4-pro-0813` | 1,000,000 | 393,216 |
 | `deepseek-v4.1-flash` | 1,000,000 | 384,000 |
 
-> ⚠️ 额度是**按账号共享**的：控制台显示的「今日已用 / 上限」与 CodeArts Agent
-> 用的是同一份配额（默认 1000 万 tokens/天）。网关跑太多会把 IDE 当天的额度吃光。
+#### ⚠️ 福利 Token 与积分包**互不相通**
 
-### 3.2 积分通道（计费）
+官方 FAQ 明确说明：这四个是**专属福利模型**，**仅消耗福利 Token**。
+福利 Token 额度用完后，这四款模型将**不可再使用**，**也不能**用积分包继续跑 ——
+只能改用积分通道的模型（`glm-5.3` / `GLM-5.2` 等）。
+
+这也是网关把两条通道严格分开、并且**对无法识别的模型名默认落到免费通道**的原因：
+宁可报错，也不静默扣积分。
+
+#### ⚠️ 额度按账号共享
+
+控制台「概览」里的进度条与 CodeArts Agent 用的是同一份配额。
+网关跑太多会把 IDE 当天的额度吃光；额度每天 24:00 重置，不会累积。
+
+#### ⚠️ 活动条款要点
+
+- **不可转让**：权益不可转让，不得兑换现金、优惠券。
+- **取消与收回**：若用户违反账号或服务相关的义务、条款、政策、法律或规则，
+  华为云保留**立即取消、作废并收回**已发放权益的权利。
+- **活动期限 / 变更**：官方保留随时终止或调整活动及其条款的权利，
+  变更将通过更新活动页或其他通知形式告知。
+
+### 2.2 积分通道（计费）
 
 需要订阅 / 企业套餐，按上游返回的 `credit[].ratio_display` 倍率扣积分：
 
@@ -154,7 +184,7 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 
 > 如果你要跑高并发，建议在控制台多导入几个账号，网关会自动轮询并在失败时换号。
 
-### 3.3 模型别名
+### 2.3 模型别名
 
 内置别名（可在控制台改成任意映射）：
 
@@ -166,7 +196,7 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 别名会继承目标模型的通道。**无法识别的模型名默认落到免费额度通道** ——
 宁可报错，也不静默扣积分。
 
-### 3.4 模型清单接口
+### 2.4 模型清单接口
 
 `GET /v1/models` 会在 `codearts` 扩展字段里带上通道与计费信息：
 
@@ -179,9 +209,9 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 
 ---
 
-## 四、凭据与续期
+## 三、凭据与续期
 
-### 4.1 凭据从哪来
+### 3.1 凭据从哪来
 
 CodeArts Agent 是 VS Code fork，登录会话存在 VS Code 的 secret storage 里，
 加密方式和 Chromium/Electron 的 OSCrypt 完全一致：
@@ -198,7 +228,7 @@ go run ./cmd/probe              # 全量诊断：凭据 / 模型 / 额度 / 对�
 go run ./cmd/probe -dump-keys   # 只列出 state.vscdb 里 ItemTable 的全部键名
 ```
 
-### 4.2 续期策略
+### 3.2 续期策略
 
 STS 临时凭证只有约 2 小时有效期。网关按下面的优先级解析：
 
@@ -221,7 +251,7 @@ STS 临时凭证只有约 2 小时有效期。网关按下面的优先级解析�
 
 长度超出时按设计跳过（返回 `ErrWriteBackSkipped`），网关仍用自己保存的凭据正常工作。
 
-### 4.3 跨平台 / Docker
+### 3.3 跨平台 / Docker
 
 DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读取桌面端凭据。
 此时有两种方式：
@@ -231,7 +261,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 ---
 
-## 五、控制台
+## 四、控制台
 
 <http://127.0.0.1:10087/>，单文件、无外部依赖、可离线使用。
 
@@ -247,7 +277,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 ---
 
-## 六、HTTP 接口
+## 五、HTTP 接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -263,7 +293,7 @@ Anthropic 侧映射为 `thinking` 内容块。
 
 ---
 
-## 七、工程结构
+## 六、工程结构
 
 ```text
 CodeArts2API/
@@ -289,7 +319,7 @@ CodeArts2API/
 
 ---
 
-## 八、安全说明
+## 七、安全说明
 
 - 状态文件（`codearts2api-data.json`）里含 STS 凭据与 `refresh_token`，
   已用 `0600` 权限写入；请勿提交到版本库（见 `.gitignore`）。
@@ -301,7 +331,7 @@ CodeArts2API/
 
 ---
 
-## 九、免责声明
+## 八、免责声明
 
 - 本项目是**互操作性研究**的产物，目的是让已有的账号权益能在用户自己选择的
   客户端里使用，不提供、不代理、不转售任何模型能力。
@@ -314,7 +344,7 @@ CodeArts2API/
 
 ---
 
-## 十、许可证
+## 九、许可证
 
 本项目以 [Apache License 2.0](LICENSE) 授权发布。
 
