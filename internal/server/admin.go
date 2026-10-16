@@ -287,6 +287,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		LogKeep           *int              `json:"log_keep"`
 		CORSOrigin        *string           `json:"cors_origin"`
 		AdminPassword     *string           `json:"admin_password"`
+		ClearPassword     *bool             `json:"clear_admin_password"`
 		AutoRefresh       *bool             `json:"auto_refresh"`
 		AllowCreditModels *bool             `json:"allow_credit_models"`
 		AllowAnonymous    *bool             `json:"allow_anonymous"`
@@ -326,8 +327,14 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.IDEName, body.IDEName)
 		setIf(&st.IDEVersion, body.IDEVersion)
 		setIf(&st.Language, body.Language)
-		if body.AdminPassword != nil {
-			st.AdminPassword = strings.TrimSpace(*body.AdminPassword)
+		// 只有显式带 clear_admin_password 才清除：空字符串一律视为「不修改」。
+		// 否则误发一个空字段就会把管理密码抹掉，让管理接口退回「本机直连」兜底。
+		if body.ClearPassword != nil && *body.ClearPassword {
+			st.AdminPassword = ""
+		} else if body.AdminPassword != nil {
+			if v := strings.TrimSpace(*body.AdminPassword); v != "" {
+				st.AdminPassword = v
+			}
 		}
 	})
 	s.persist()
