@@ -98,7 +98,15 @@ type State struct {
 
 // Store 是带锁的状态容器。
 type Store struct {
-	mu     sync.RWMutex
+	// mu 保护 st 里的字段（含账号指针指向的对象）。
+	mu sync.RWMutex
+	// saveMu 串行化落盘。
+	//
+	// 并发 Save 曾共用同一个 `<path>.tmp`：Windows 上直接报「文件被占用」
+	// 而失败（调用方多半忽略错误 → 状态静默不落盘），Linux 上则可能把写了一半
+	// 的临时文件 rename 成正式状态文件（含 refresh_token 的账号全部丢失）。
+	// 因此落盘必须串行，并且临时文件名要唯一。
+	saveMu sync.Mutex
 	path   string
 	st     *State
 	rotate int
@@ -207,19 +215,41 @@ func (s *Store) applyDefaults() {
 func (s *Store) Path() string { return s.path }
 
 // Save 原子写回状态文件。
+//
+// 并发安全：saveMu 保证同一时刻只有一个 goroutine 在写；临时文件名带随机后缀，
+// 即使有第二个进程共享同一个状态文件也不会互相截断。
 func (s *Store) Save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.RLock()
 	raw, err := json.MarshalIndent(s.st, "", "  ")
 	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	// 状态文件里含 STS 凭据与 refresh_token，权限收到 0600。
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+
+	// os.CreateTemp 以 0600 创建 —— 状态文件里含 STS 凭据与 refresh_token。
+	f, err := os.CreateTemp(dir, filepath.Base(s.path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // rename 成功后这里是 no-op
+
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

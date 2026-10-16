@@ -107,7 +107,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 				"expires_at": res.Expires.Unix(), "new": isNew,
 			})
 		}
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(imported), "imported": imported})
 
 	case "manual":
@@ -118,7 +118,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		isNew := s.Store.UpsertAccount(acct)
 		s.Cred.Invalidate(acct.ID)
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "new": isNew, "id": acct.ID})
 
 	case "session-json":
@@ -141,12 +141,12 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		isNew := s.Store.UpsertAccount(acct)
 		s.Cred.Invalidate(acct.ID)
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "new": isNew, "id": acct.ID})
 
 	case "remove":
 		ok := s.Store.RemoveAccount(body.ID)
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": ok})
 
 	case "toggle":
@@ -208,7 +208,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, err.Error(), "upstream_error")
 			return
 		}
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 
 	default:
@@ -235,7 +235,7 @@ func (s *Server) handleAdminKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		k := s.Store.AddKey(body.Name)
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": k.Key})
 	case http.MethodDelete:
 		q := r.URL.Query()
@@ -245,7 +245,7 @@ func (s *Server) handleAdminKeys(w http.ResponseWriter, r *http.Request) {
 		if ref := q.Get("toggle"); ref != "" {
 			_ = s.Store.ToggleKey(s.resolveKeyRef(ref))
 		}
-		_ = s.Store.Save()
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法", "invalid_request_error")
@@ -328,7 +328,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			st.AdminPassword = strings.TrimSpace(*body.AdminPassword)
 		}
 	})
-	_ = s.Store.Save()
+	s.persist()
 	// 身份头变更后重建上游客户端
 	s.ApplyIdentity()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings": sanitizedSettings(s.Store.Settings())})
@@ -393,7 +393,7 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, row)
 	}
-	_ = s.Store.Save()
+	s.persist()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
 }
 

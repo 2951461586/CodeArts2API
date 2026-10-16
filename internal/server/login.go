@@ -128,7 +128,7 @@ func (s *Server) handleAdminLoginPoll(w http.ResponseWriter, r *http.Request) {
 				Session: sess,
 			}
 			isNew := s.Store.UpsertAccount(acct)
-			_ = s.Store.Save()
+			s.persist()
 			resp["account_id"] = acct.ID
 			resp["account_name"] = acct.DisplayName()
 			resp["new"] = isNew

@@ -257,6 +257,17 @@ func isLoopbackAddr(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// persist 保存状态文件，失败时记日志。
+//
+// 控制台各操作遍布 Save 调用，逐一处理错误会淹没业务逻辑；但**绝不能静默忽略** ——
+// 状态文件里含 STS 凭据与 refresh_token，写失败（磁盘满 / 文件被占用）
+// 意味着签到记录、密钥、设置会悄悄丢失。
+func (s *Server) persist() {
+	if err := s.Store.Save(); err != nil {
+		log.Printf("保存状态文件失败: %v", err)
+	}
+}
+
 // resolveOptions 把设置转换为凭据解析策略。
 func (s *Server) resolveOptions() codearts.ResolveOptions {
 	st := s.Store.Settings()

@@ -100,7 +100,7 @@ func (s *Server) ClaimForAccount(ctx context.Context, a *codearts.Account, today
 	sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
 	if err != nil {
 		s.Store.MarkClaimResult(a.ID, today, false, err.Error())
-		_ = s.Store.Save()
+		s.persist()
 		return "", err
 	}
 
@@ -137,7 +137,7 @@ func (s *Server) ClaimForAccount(ctx context.Context, a *codearts.Account, today
 	// 只要有一项成功就记下当天日期，避免同一轮反复重试
 	ok := firstErr == nil
 	s.Store.MarkClaimResult(a.ID, today, ok, msg)
-	_ = s.Store.Save()
+	s.persist()
 
 	if !ok {
 		return msg, firstErr
