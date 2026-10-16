@@ -40,7 +40,7 @@ type BenefitClaim struct {
 
 // FetchBenefitGatewayConfig 查询福利通道是否开放（普通 / 教育 / 考试）。
 func (c *Client) FetchBenefitGatewayConfig(ctx context.Context, sess *Session, channel string) (*BenefitGatewayConfig, error) {
-	h := c.baseHeaders("", ChannelCredit)
+	h := c.baseHeaders(sess, "", ChannelCredit)
 	h["Agent-Type"] = "PromptCenter"
 	path := BenefitGatewayConfigPath
 	if channel != "" {
@@ -74,7 +74,7 @@ func (c *Client) ClaimBenefit(ctx context.Context, sess *Session, channel string
 	if channel != "" {
 		path += "?channel=" + channel
 	}
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, path, nil, c.baseHeaders("", ChannelCredit))
+	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, path, nil, c.baseHeaders(sess, "", ChannelCredit))
 	if err != nil {
 		return nil, err
 	}

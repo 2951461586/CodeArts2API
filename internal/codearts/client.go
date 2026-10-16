@@ -129,13 +129,21 @@ func NewClient() *Client {
 //
 // channel 决定是否带 `maas_type: benefit`：benefit 走免费权益额度，
 // credit 不带该头从而落到积分通道。
-func (c *Client) baseHeaders(model string, channel Channel) map[string]string {
+//
+// sess 用于推导**稳定的**上游会话 ID：上游按 x-ot-session-id 统计并发会话
+// （每账号上限 3 个），每个请求都换新 ID 会迅速打满上限。
+func (c *Client) baseHeaders(sess *Session, model string, channel Channel) map[string]string {
 	id := c.Identity
 	if id.PluginName == "" {
 		id = DefaultIdentity()
 	}
 	traceID := RandomHex(16)
 	spanID := RandomHex(8)
+	// 同一个凭据复用同一个会话 ID（凭据轮换后会自然换新）
+	sid := sess.UpstreamSessionID()
+	if sid == "" {
+		sid = "ses_" + RandomHex(12)
+	}
 	h := map[string]string{
 		"content-type":           "application/json",
 		"app-id":                 id.AppID,
@@ -151,9 +159,9 @@ func (c *Client) baseHeaders(model string, channel Channel) map[string]string {
 		"ide-version":            id.IDEVersion,
 		"created-time":           time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		"user-msg-id":            "msg_" + RandomHex(12),
-		"x-ot-session-id":        "ses_" + RandomHex(12),
+		"x-ot-session-id":        sid,
 		"x-ot-parent-session-id": "",
-		"user-session-id":        "ses_" + RandomHex(12),
+		"user-session-id":        sid,
 		"is_confidential":        "false",
 	}
 	if id.Language != "" {
@@ -241,7 +249,7 @@ type gatewayEnvelope struct {
 
 // FetchGatewayConfig 拉取 benefit 通道可用模型。
 func (c *Client) FetchGatewayConfig(ctx context.Context, sess *Session) (*GatewayConfig, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, GatewayConfigPath, nil, c.baseHeaders("", ChannelCredit))
+	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, GatewayConfigPath, nil, c.baseHeaders(sess, "", ChannelCredit))
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +291,7 @@ type TokensBalance struct {
 
 // FetchBalance 查询额度余额。
 func (c *Client) FetchBalance(ctx context.Context, sess *Session) (*TokensBalance, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, BalancePath, nil, c.baseHeaders("", ChannelCredit))
+	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, BalancePath, nil, c.baseHeaders(sess, "", ChannelCredit))
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +360,7 @@ func (m BuiltinModel) IsBillable() bool { return len(m.Credit) > 0 }
 
 // FetchBuiltinModels 拉取内置模型清单（需要 Agent-Type: PromptCenter）。
 func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]BuiltinModel, error) {
-	h := c.baseHeaders("", ChannelCredit)
+	h := c.baseHeaders(sess, "", ChannelCredit)
 	h["Agent-Type"] = "PromptCenter"
 	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, BuiltinModelsPath, nil, h)
 	if err != nil {
@@ -381,7 +389,7 @@ func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]Built
 // 上游返回标准 OpenAI SSE（data: {chat.completion.chunk}），
 // 因此这里只做「拆包 + 错误识别」，不做任何协议转换。
 func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, channel Channel, body []byte, onChunk func([]byte) error) error {
-	h := c.baseHeaders(model, channel)
+	h := c.baseHeaders(sess, model, channel)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return err
@@ -419,7 +427,7 @@ func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, ch
 
 // Chat 向 inferhub 发起非流式对话，返回原始响应体。
 func (c *Client) Chat(ctx context.Context, sess *Session, model string, channel Channel, body []byte) ([]byte, error) {
-	h := c.baseHeaders(model, channel)
+	h := c.baseHeaders(sess, model, channel)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return nil, err

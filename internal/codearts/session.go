@@ -1,6 +1,8 @@
 package codearts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -56,6 +58,28 @@ func (s *Session) ExpiresIn() time.Duration {
 // HasRefresh 报告是否具备自行续期的条件。
 func (s *Session) HasRefresh() bool {
 	return s != nil && s.RefreshToken != "" && len(s.DPoPPrivateJWK) > 0 && s.CodeVerifier != ""
+}
+
+// UpstreamSessionID 返回该凭据在上游的稳定会话 ID。
+//
+// 必须**复用**：上游按 x-ot-session-id 统计并发会话（每账号上限 3 个），
+// 每个请求都换新 ID 会迅速打满上限并返回 TM.00001041（网关侧表现为 429/502）。
+// 凭据轮换（AccessKey 变化）后自然换一个新 ID。
+//
+// 纯函数、不做缓存 —— Session 会被多个 goroutine 共享，写缓存字段就是数据竞争。
+func (s *Session) UpstreamSessionID() string {
+	if s == nil {
+		return ""
+	}
+	key := s.DomainID + "|" + s.AccessKey
+	if key == "|" {
+		key = s.AccountLabel
+	}
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "ses_" + hex.EncodeToString(sum[:8])
 }
 
 // RawJSON 返回可用于回写 state.vscdb / 导出的 session JSON。

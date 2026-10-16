@@ -546,7 +546,7 @@ func (c *Client) ExchangeAuthorizationCode(ctx context.Context, code string, pkc
 
 // CallerIdentity 查询当前凭据对应的账号信息。
 func (c *Client) CallerIdentity(ctx context.Context, sess *Session) (id, name, domainID string, err error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, IAMHost, CallerIdentityPath, nil, c.baseHeaders("", ChannelCredit))
+	resp, err := c.do(ctx, sess, http.MethodGet, IAMHost, CallerIdentityPath, nil, c.baseHeaders(sess, "", ChannelCredit))
 	if err != nil {
 		return "", "", "", err
 	}

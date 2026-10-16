@@ -126,15 +126,15 @@ type welfareEnvelope struct {
 }
 
 // opsHeaders 是 ops 接口需要的请求头。
-func (c *Client) opsHeaders() map[string]string {
-	h := c.baseHeaders("", ChannelCredit)
+func (c *Client) opsHeaders(sess *Session) map[string]string {
+	h := c.baseHeaders(sess, "", ChannelCredit)
 	h["Agent-Type"] = "PromptCenter"
 	return h
 }
 
 // FetchWelfareDelivery 拉取活动福利列表。
 func (c *Client) FetchWelfareDelivery(ctx context.Context, sess *Session) (*WelfareDelivery, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, WelfareDeliveryPath+"?channel=IDE", nil, c.opsHeaders())
+	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, WelfareDeliveryPath+"?channel=IDE", nil, c.opsHeaders(sess))
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +188,7 @@ func (c *Client) ClaimWelfare(ctx context.Context, sess *Session, campaignID int
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, WelfareClaimPath, body, c.opsHeaders())
+	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, WelfareClaimPath, body, c.opsHeaders(sess))
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func (c *Client) GenerateInviteCode(ctx context.Context, sess *Session, campaign
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, WelfareInvitePath, body, c.opsHeaders())
+	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, WelfareInvitePath, body, c.opsHeaders(sess))
 	if err != nil {
 		return nil, err
 	}
