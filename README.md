@@ -590,7 +590,24 @@ python tools/check_html_js.py internal/server/web/index.html
 
 # 本机诊断：凭据 / 模型 / 额度 / 活动福利 / 对话探活
 go run ./cmd/probe
+
+# 并发竞态检查（需要 cgo；Windows 下注意下面的说明）
+go test -race ./...
 ```
+
+> **在 Windows 上跑 `-race`**：`-race` 需要 cgo，而 Go 会调用 `gcc` 来链接，
+> `gcc` 内部又去找 `ld`。scoop 装的 mingw 只提供了 `ld.bfd.exe`，没有 `ld.exe`，
+> 于是报 `collect2.exe: fatal error: cannot find 'ld'`。做一个同名副本即可：
+>
+> ```bash
+> mkdir -p /tmp/ldshim
+> cp "$HOME/scoop/apps/mingw/current/bin/ld.bfd.exe" /tmp/ldshim/ld.exe
+> PATH="/tmp/ldshim:$PATH" go test -race ./...
+> ```
+>
+> `internal/store` 的 `TestConcurrentAccountAccessIsSafe` 就是为 `-race` 写的：
+> 它并发跑「控制台读账号快照 + 请求路径写账号字段」，能直接抓到
+> 「对外暴露内部 `*Account` 指针」这类数据竞争。
 
 > 控制台只有一个 `<script>` 区块，**任何一处语法错误都会让整段脚本不执行** ——
 > 按钮、事件绑定、初始加载全部失效，表现是「能输密码但点什么都没反应」。
