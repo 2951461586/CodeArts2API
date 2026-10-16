@@ -106,14 +106,17 @@ type LoginFlow struct {
 	Started  time.Time
 	Finished time.Time
 
-	client   *Client
-	pkce     pkcePair
-	dpop     dpopKeyPair
-	server   *http.Server
-	listener net.Listener
-	code     string
-	secret   string
-	saved    bool
+	client *Client
+	pkce   pkcePair
+	dpop   dpopKeyPair
+	server *http.Server
+	// portalHostname 是本次登录使用的门户主机名（自建 / 测试环境时
+	// 跳转目标可能落在它上面，因此允许跟随）。
+	portalHostname string
+	listener       net.Listener
+	code           string
+	secret         string
+	saved          bool
 
 	mu     sync.Mutex
 	done   chan struct{}
@@ -164,6 +167,11 @@ func (m *LoginManager) Start(opt LoginOptions) (*LoginFlow, error) {
 	if opt.Timeout <= 0 {
 		opt.Timeout = loginTimeout
 	}
+	// portal_host 来自控制台请求体，而登录流程会把浏览器与 chaseCallback 的
+	// 服务端请求都导向它 —— 先校验 scheme，后面 allowedHop 才能信任它。
+	if err := validatePortalHost(opt.PortalHost); err != nil {
+		return nil, err
+	}
 
 	pkce, err := newPKCEPair()
 	if err != nil {
@@ -181,15 +189,16 @@ func (m *LoginManager) Start(opt LoginOptions) (*LoginFlow, error) {
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	flow := &LoginFlow{
-		ID:       RandomHex(8),
-		client:   m.Client,
-		Port:     port,
-		Status:   LoginPending,
-		Started:  time.Now(),
-		pkce:     *pkce,
-		dpop:     *dpop,
-		listener: ln,
-		done:     make(chan struct{}),
+		ID:             RandomHex(8),
+		client:         m.Client,
+		Port:           port,
+		Status:         LoginPending,
+		Started:        time.Now(),
+		pkce:           *pkce,
+		dpop:           *dpop,
+		portalHostname: hostnameOf(opt.PortalHost),
+		listener:       ln,
+		done:           make(chan struct{}),
 	}
 	flow.AuthURL = buildAuthorizeURL(opt, port, pkce)
 
@@ -372,6 +381,12 @@ func (f *LoginFlow) chaseCallback(ctx context.Context, raw string) (string, erro
 			}
 			return "", fmt.Errorf("回调 URL 里没有 code 参数")
 		}
+		// 服务端只允许跟随到华为云门户 / 本机回调：redirect 参数来自用户粘贴的
+		// 外部输入，不加限制就是一个 SSRF 面。
+		if !f.allowedHop(u) {
+			return "", fmt.Errorf("第 %d 跳的目标不在允许范围内（%s）：只允许华为云门户与本机回调地址。"+
+				"请把浏览器最终停在的那个地址（含 code= 或 redirect= 参数）粘贴过来", hop, u.Host)
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, cur, nil)
 		if err != nil {
 			return "", err
@@ -397,6 +412,80 @@ func (f *LoginFlow) chaseCallback(ctx context.Context, raw string) (string, erro
 		cur = next.String()
 	}
 	return "", fmt.Errorf("重定向次数过多（>10），放弃")
+}
+
+// allowedChaseHostSuffixes 是服务端允许跟随跳转的域名后缀。
+//
+// chaseCallback 会**由服务端**去请求这些地址，而待跟随的 redirect 参数
+// 来自用户粘贴的外部输入 —— 不加限制就是一个 SSRF 面。
+var allowedChaseHostSuffixes = []string{
+	".huaweicloud.com",
+	".huaweicloud.cn",
+	".huawei.com",
+	".myhuaweicloud.com",
+	".myhuaweicloud.cn",
+}
+
+// allowedHop 报告是否允许服务端跟随到该跳转目标。
+//
+// 只允许：本机回调地址、本次登录使用的门户主机（已在 Start 校验过）、
+// 以及华为云域名（https）。
+func (f *LoginFlow) allowedHop(u *url.URL) bool {
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	if isLoopbackName(host) {
+		return true
+	}
+	if u.Scheme != "https" {
+		return false
+	}
+	// 自建 / 测试环境的门户（scheme 已在 Start 里校验）
+	if f.portalHostname != "" && host == f.portalHostname {
+		return true
+	}
+	for _, suffix := range allowedChaseHostSuffixes {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLoopbackName 判断主机名是否为本机回环。
+func isLoopbackName(host string) bool {
+	switch strings.ToLower(host) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
+}
+
+// validatePortalHost 校验授权门户地址。
+//
+// 只接受 https；本机回环地址额外允许 http（本地联调）。
+func validatePortalHost(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("门户地址无效: %q", raw)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && isLoopbackName(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("门户地址只支持 https（本机回环可用 http）: %q", raw)
+}
+
+// hostnameOf 取 URL 的主机名（小写）；解析失败返回空串。
+func hostnameOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // isOwnCallback 判断 URL 是否指向本流程的回调服务器。

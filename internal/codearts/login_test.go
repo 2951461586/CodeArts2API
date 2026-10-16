@@ -223,11 +223,110 @@ func TestChaseCallbackRejectsLegacySecret(t *testing.T) {
 	defer cancel()
 
 	_, err := f.chaseCallback(ctx, "http://127.0.0.1:64361/oauth/callback?secret=abc&redirect=https://x/y")
-	// secret+redirect 会先跟随 redirect（网络不可达），错误信息里应提示重新发起
 	if err == nil {
 		t.Fatal("应报错")
 	}
-	t.Logf("错误信息: %v", err)
+	// redirect 指向非华为云域名 → 被跟随白名单挡住（同时也是一个 SSRF 防护）
+	if !strings.Contains(err.Error(), "不在允许范围内") {
+		t.Errorf("错误信息应提示跳转目标被拒: %v", err)
+	}
+}
+
+// TestAllowedHopBlocksSSRF 回归：chaseCallback 由服务端发请求，
+// 而 redirect 参数来自用户粘贴的外部输入，必须限制目标范围。
+func TestAllowedHopBlocksSSRF(t *testing.T) {
+	f := &LoginFlow{Port: 64361, portalHostname: "codearts.huaweicloud.com"}
+
+	cases := map[string]bool{
+		// 允许：本机回调
+		"http://127.0.0.1:64361/oauth/callback?code=X": true,
+		"http://localhost:64361/oauth/callback?code=X": true,
+		// 允许：华为云门户 / IAM
+		"https://codearts.huaweicloud.com/portal/login":       true,
+		"https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2":  true,
+		"https://opengw.developer.huaweicloud.com/api/v1/foo": true,
+		// 允许：本次登录使用的门户主机
+		"https://codearts.huaweicloud.com/x": true,
+		// 拒绝：内网地址（SSRF 典型目标）
+		"http://169.254.169.254/latest/meta-data/": false,
+		"http://10.0.0.1:8080/admin":               false,
+		"http://192.168.1.1/":                      false,
+		// 拒绝：外部域名 / 域名后缀伪造
+		"https://evil.example.com/":         false,
+		"https://huaweicloud.com.evil.com/": false,
+		"https://xnot-huaweicloud.com/":     false,
+		// 拒绝：明文 http 的外部域名
+		"http://codearts.huaweicloud.com/": false,
+	}
+	for raw, want := range cases {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		if got := f.allowedHop(u); got != want {
+			t.Errorf("allowedHop(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestValidatePortalHost 门户地址必须是 https（本机回环额外允许 http）。
+func TestValidatePortalHost(t *testing.T) {
+	ok := []string{
+		"https://codearts.huaweicloud.com/portal",
+		"https://example.com",
+		"http://127.0.0.1:8080/portal",
+		"http://localhost:8080",
+	}
+	for _, raw := range ok {
+		if err := validatePortalHost(raw); err != nil {
+			t.Errorf("validatePortalHost(%q) 应通过: %v", raw, err)
+		}
+	}
+	bad := []string{
+		"",
+		"http://codearts.huaweicloud.com/portal",
+		"http://169.254.169.254/",
+		"file:///etc/passwd",
+		"ftp://example.com",
+		"not a url",
+		"https://",
+	}
+	for _, raw := range bad {
+		if err := validatePortalHost(raw); err == nil {
+			t.Errorf("validatePortalHost(%q) 应被拒绝", raw)
+		}
+	}
+}
+
+// TestLoginManagerRejectsBadPortalHost Start 必须拒绝非 https 门户。
+//
+// portal_host 来自控制台请求体，若直接拿去发请求就是 SSRF。
+func TestLoginManagerRejectsBadPortalHost(t *testing.T) {
+	m := NewLoginManager(NewClient())
+	for _, raw := range []string{
+		"http://169.254.169.254/",
+		"http://example.com/portal",
+		"file:///etc/passwd",
+	} {
+		if _, err := m.Start(LoginOptions{PortalHost: raw}); err == nil {
+			t.Errorf("Start(%q) 应被拒绝", raw)
+		}
+	}
+}
+
+// TestHostnameOf 门户主机名提取。
+func TestHostnameOf(t *testing.T) {
+	cases := map[string]string{
+		"https://codearts.huaweicloud.com/portal": "codearts.huaweicloud.com",
+		"https://Example.COM:8443/x":              "example.com",
+		"":                                        "",
+		"::not a url":                             "",
+	}
+	for raw, want := range cases {
+		if got := hostnameOf(raw); got != want {
+			t.Errorf("hostnameOf(%q) = %q, want %q", raw, got, want)
+		}
+	}
 }
 
 // TestLoginCallbackTwoHops 验证回调服务器的两跳行为与 IDE 一致：
