@@ -39,6 +39,11 @@ type Settings struct {
 	// AllowCreditModels 允许调用走积分（计费）通道的模型，如 GLM-5.3。
 	// 关闭后只放行免费权益通道的模型。
 	AllowCreditModels bool `json:"allow_credit_models"`
+	// AllowAnonymous 允许在尚未签发任何 API 密钥时，从非本机来源匿名调用 /v1/*。
+	//
+	// 默认关闭：没密钥时只放行本机直连。置真等于把账号额度开放给能访问到
+	// 这个端口的所有人，仅在你确定端口没有对外暴露时才开启。
+	AllowAnonymous bool `json:"allow_anonymous"`
 	// AutoClaim 每天自动领取免费福利 Token（幂等，重复领不报错）。
 	AutoClaim bool `json:"auto_claim"`
 	// ClaimAfterHour / ClaimAfterMinute 是每天开始签到的本地时刻。

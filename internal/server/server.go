@@ -158,12 +158,21 @@ func IsLoopbackHost(host string) bool { return isLoopbackHost(host) }
 
 // withAuth 校验 Bearer 密钥。
 //
-// 未签发任何密钥时，允许无密钥访问（首次使用的便利）；
-// 一旦签发了密钥，则强制校验。
+// 未签发任何密钥时，为首次使用的便利允许匿名调用 —— 但**仅限本机直连**。
+// 否则一旦把监听地址设成 0.0.0.0（Dockerfile 的默认 CMD 就是），
+// 任何人都能白嫖账号额度。需要对外匿名开放时，在设置里显式打开
+// 「允许匿名调用」（allow_anonymous）。
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.Store.HasKeys() {
-			next(w, r)
+			if s.Store.Settings().AllowAnonymous || s.localDirect(r) {
+				next(w, r)
+				return
+			}
+			writeErr(w, http.StatusUnauthorized,
+				"尚未签发 API 密钥：请先在控制台创建密钥；若确实需要匿名开放，"+
+					"请在设置里打开「允许匿名调用」。",
+				"invalid_request_error")
 			return
 		}
 		key := extractKey(r)
@@ -339,6 +348,7 @@ func sanitizedSettings(st store.Settings) map[string]any {
 		"cors_origin":         st.CORSOrigin,
 		"auto_refresh":        st.AutoRefresh,
 		"allow_credit_models": st.AllowCreditModels,
+		"allow_anonymous":     st.AllowAnonymous,
 		"auto_claim":          st.AutoClaim,
 		"claim_after_hour":    st.ClaimAfterHour,
 		"claim_after_minute":  st.ClaimAfterMinute,

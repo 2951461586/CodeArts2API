@@ -289,6 +289,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		AdminPassword     *string           `json:"admin_password"`
 		AutoRefresh       *bool             `json:"auto_refresh"`
 		AllowCreditModels *bool             `json:"allow_credit_models"`
+		AllowAnonymous    *bool             `json:"allow_anonymous"`
 		WriteBackToIDE    *bool             `json:"write_back_to_ide"`
 		LiveTTLSeconds    *int              `json:"live_ttl_sec"`
 		UserDataDir       *string           `json:"user_data_dir"`
@@ -315,6 +316,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.CORSOrigin, body.CORSOrigin)
 		setIf(&st.AutoRefresh, body.AutoRefresh)
 		setIf(&st.AllowCreditModels, body.AllowCreditModels)
+		setIf(&st.AllowAnonymous, body.AllowAnonymous)
 		setIf(&st.WriteBackToIDE, body.WriteBackToIDE)
 		setIf(&st.LiveTTLSeconds, body.LiveTTLSeconds)
 		setIf(&st.UserDataDir, body.UserDataDir)

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +41,7 @@ func main() {
 		noImport   = flag.Bool("no-import", false, "启动时不自动导入桌面端登录态")
 		noRefresh  = flag.Bool("no-refresh", false, "禁止网关自行续期（只读 IDE 会话）")
 		adminPw    = flag.String("admin-password", envOr("CODEARTS_ADMIN_PASSWORD", ""), "管理密码（非空时覆盖状态文件中的设置）")
+		anon       = flag.Bool("allow-anonymous", envBool("CODEARTS_ALLOW_ANONYMOUS"), "未签发密钥时允许非本机来源匿名调用 /v1/*（默认仅本机直连）")
 		showVer    = flag.Bool("version", false, "打印版本后退出")
 	)
 	flag.Parse()
@@ -87,6 +89,10 @@ func main() {
 		})
 		log.Printf("已关闭网关自行续期，仅读取 IDE 会话")
 	}
+	if *anon {
+		st.UpdateSettings(func(s *store.Settings) { s.AllowAnonymous = true })
+		log.Printf("⚠️  已允许匿名调用 /v1/*（未签发密钥时任何能访问本端口的人都可以消耗账号额度）")
+	}
 
 	if !*noImport {
 		autoImport(st, *userData)
@@ -123,8 +129,10 @@ func main() {
 		log.Printf("CodeArts2API %s 已启动: http://%s/", version, addr)
 		if st.HasKeys() {
 			log.Printf("已签发 API 密钥，调用需携带 Authorization: Bearer sk-ca-...")
+		} else if st.Settings().AllowAnonymous {
+			log.Printf("⚠️  尚未签发 API 密钥，且已允许匿名调用：任何能访问本端口的人都可以使用账号额度")
 		} else {
-			log.Printf("尚未签发 API 密钥，当前允许无密钥调用（控制台可创建）")
+			log.Printf("尚未签发 API 密钥：/v1/* 目前仅允许本机直连，请在控制台创建密钥")
 		}
 		switch {
 		case st.Settings().AdminPassword != "":
@@ -267,4 +275,13 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// envBool 读取布尔环境变量（1/true/yes/on 视为真）。
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
