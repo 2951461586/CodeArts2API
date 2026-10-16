@@ -118,7 +118,7 @@
       <div class="card" id="invitePanel" style="display:none;margin-top:12px">
         <h2>我的邀请链接</h2>
         <div class="row">
-          <input id="inviteURL" readonly style="flex:1;min-width:320px" onclick="this.select()">
+          <input id="inviteURL" readonly style="flex:1;min-width:320px" data-select-on-click="1">
           <button class="btn" id="copyInvite">复制</button>
         </div>
         <div class="hint" id="inviteStat"></div>
@@ -153,7 +153,7 @@
           <div style="flex:1;min-width:320px">
             <div id="exportMeta" class="muted"></div>
             <label>session JSON（可直接粘贴到另一台机器 / 容器的「从 session JSON 导入」）</label>
-            <textarea id="exportJSON" readonly style="width:100%;min-height:160px" onclick="this.select()"></textarea>
+            <textarea id="exportJSON" readonly style="width:100%;min-height:160px" data-select-on-click="1"></textarea>
           </div>
           <div>
             <button class="btn primary" id="copyExport">复制</button>
@@ -173,7 +173,7 @@
             <div id="loginStatus" class="muted">等待打开授权页…</div>
             <div class="hint">回调地址是 <code>127.0.0.1</code>，因此<b>浏览器必须与网关在同一台机器上</b>。</div>
             <label>授权地址（点链接打开，或复制到浏览器）</label>
-            <input id="loginURL" readonly style="width:100%" onclick="this.select()">
+            <input id="loginURL" readonly style="width:100%" data-select-on-click="1">
           </div>
           <div>
             <!-- 用真实链接而不是 window.open：弹窗拦截器不会拦，也没有 open-redirect 面 -->
@@ -193,7 +193,7 @@
 
           <label>方案 A：SSH 本地端口转发（推荐，之后浏览器会自动跳回）</label>
           <div class="row">
-            <input id="loginTunnel" readonly style="flex:1;min-width:320px" onclick="this.select()">
+            <input id="loginTunnel" readonly style="flex:1;min-width:320px" data-select-on-click="1">
             <button class="btn" id="copyTunnel">复制</button>
           </div>
           <div class="hint">在<b>你本机</b>执行这条命令并保持不断，然后点「打开授权页」即可。</div>
@@ -992,6 +992,12 @@
     }).catch(function(e){ toast("清除失败：" + e.message, "err"); });
   };
   $("#logLimit").onchange = refreshLogs;
+
+  // 只读输入框：点击即全选。
+  // 用事件绑定而不是内联 onclick 属性，这样 CSP 不需要放开内联事件处理器。
+  document.querySelectorAll("[data-select-on-click]").forEach(function(el){
+    el.addEventListener("click", function(){ this.select(); });
+  });
 
   try { var saved = localStorage.getItem("codearts2api_pw"); if (saved) $("#pw").value = saved; } catch(e){}
   $("#pw").addEventListener("keydown", function(e){ if (e.key === "Enter") { $("#savePw").click(); } });

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -137,4 +139,48 @@ func stripLiteralsAndComments(s string) string {
 // countDoubleQuotes 数一行里的双引号个数（不含被剥掉的部分）。
 func countDoubleQuotes(s string) int {
 	return strings.Count(s, string(rune(jsQuote)))
+}
+
+// TestConsoleSendsCSP 控制台响应必须带 CSP，且页面本身不能有内联事件处理器
+// （否则 CSP 就得放开 'unsafe-inline' 的脚本执行面）。
+func TestConsoleSendsCSP(t *testing.T) {
+	rec := httptest.NewRecorder()
+	serveConsole(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("控制台响应缺少 Content-Security-Policy")
+	}
+	for _, want := range []string{
+		"default-src 'none'",
+		"connect-src 'self'",
+		"base-uri 'none'",
+		"form-action 'none'",
+		"frame-ancestors 'none'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP 缺少 %q：%s", want, csp)
+		}
+	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("缺少 X-Content-Type-Options: nosniff")
+	}
+
+	// 页面里不能出现内联事件处理器属性
+	html := string(consoleHTML)
+	for _, attr := range []string{" onclick=", " onload=", " onerror=", " onmouseover=", "javascript:"} {
+		if strings.Contains(html, attr) {
+			t.Errorf("控制台存在内联事件处理器 %q，与收紧后的 CSP 冲突", attr)
+		}
+	}
+}
+
+// TestConsoleUsesTextContentOnly 回归：页面不得使用 HTML 拼接 API（XSS 面）。
+func TestConsoleUsesTextContentOnly(t *testing.T) {
+	html := string(consoleHTML)
+	for _, sink := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function("} {
+		if strings.Contains(html, sink) {
+			t.Errorf("控制台使用了危险的 HTML/JS 拼接 API: %s", sink)
+		}
+	}
 }
