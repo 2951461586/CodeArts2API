@@ -292,6 +292,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		WriteBackToIDE    *bool             `json:"write_back_to_ide"`
 		LiveTTLSeconds    *int              `json:"live_ttl_sec"`
 		UserDataDir       *string           `json:"user_data_dir"`
+		LoginPort         *int              `json:"login_port"`
 		PluginName        *string           `json:"plugin_name"`
 		PluginVersion     *string           `json:"plugin_version"`
 		IDEName           *string           `json:"ide_name"`
@@ -317,6 +318,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.WriteBackToIDE, body.WriteBackToIDE)
 		setIf(&st.LiveTTLSeconds, body.LiveTTLSeconds)
 		setIf(&st.UserDataDir, body.UserDataDir)
+		setIf(&st.LoginPort, body.LoginPort)
 		setIf(&st.PluginName, body.PluginName)
 		setIf(&st.PluginVersion, body.PluginVersion)
 		setIf(&st.IDEName, body.IDEName)

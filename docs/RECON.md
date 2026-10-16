@@ -389,6 +389,39 @@ app.get("/oauth/callback", async (req, res) => {
 登录成功后可再调 `GET https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity`
 补全账号名与 domain id（`getUserInfo()` 用的就是这个）。
 
+#### 3.8.1 回调地址为什么不能改成域名
+
+`authorize` URL **只传 `port=`，不传 `redirect_uri`**；门户按 client_id 的注册信息
+自己拼出 `http://127.0.0.1:<port>/oauth/callback`。换凭据时 `redirect_uri` 同样是
+写死的：
+
+```js
+{ client_id: "codearts-agent",
+  code: <authorizationCode>,
+  code_verifier: <pkcePair.codeVerifier>,
+  grant_type: "authorization_code",
+  redirect_uri: `http://127.0.0.1:${i}${AUTH_REDIRECT_URL}` }   // 写死环回
+```
+
+也就是说 `codearts-agent` 是注册成 **native app（RFC 8252 环回重定向）** 的，
+只接受环回地址。因此：
+
+* 反代 / CF 域名**无法**成为回调地址（STS 侧会拒绝 `redirect_uri` 不匹配）；
+* 浏览器永远把 `127.0.0.1` 解析到它自己，远端服务器上的回调服务器收不到。
+
+可行的三条路：
+
+| 方案 | 做法 | 依赖 |
+| --- | --- | --- |
+| **SSH 本地转发** | 固定回调端口，本机跑 `ssh -N -L <port>:127.0.0.1:<port> user@server` | 有 SSH 访问 |
+| **OOB 粘贴回调 URL** | 浏览器停在 `http://127.0.0.1:<port>/oauth/callback?...` 报错页时，把地址栏 URL 粘回控制台；网关**服务端**把剩下的重定向链走完 | 无 |
+| **导出 / 导入 session JSON** | 在能跑登录的机器上导出，导进服务器 | 无 |
+
+OOB 模式的关键是：门户的两跳链
+（`?secret=&redirect=` → `?code=`）**都是纯 HTTP 307**，
+所以网关可以用一个不自动跟随重定向的 HTTP client 逐跳走完，
+直到 Location 指回自己的回调服务器，再从 query 里取 `code`。
+
 ### 3.9 运营活动子系统（「活动福利」）
 
 复刻 `out/extension.js` 里的 `s6i`：

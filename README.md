@@ -381,8 +381,55 @@ curl -X POST http://<网关>/admin/api/accounts   -H 'Content-Type: application/
    之后凭 refresh_token 就能长期自动续期
 ```
 
-> ⚠️ 回调地址是 `127.0.0.1`，所以**浏览器必须与网关在同一台机器上**。
-> 容器 / 远程部署请改用「桌面端导入」或「session JSON 导入」。
+#### ⚠️ 远端部署（服务器上的网关 + 本地浏览器）
+
+回调地址在协议里**写死**为 `http://127.0.0.1:<port>/oauth/callback`：
+
+```js
+// authorize URL 只传 port，redirect_uri 由门户自己拼
+?uri_scheme=codearts-agent&client_id=codearts-agent&port=<port>&code_challenge=...
+// 换凭据时也是写死的
+redirect_uri: `http://127.0.0.1:${port}/oauth/callback`
+```
+
+这是 OAuth 的 **native app / loopback 重定向**（RFC 8252）——
+`codearts-agent` 这个 client_id 注册的就是「只允许环回地址」，
+所以**你的域名不可能成为回调地址**，CF / Nginx 反代也解决不了。
+浏览器永远把 `127.0.0.1` 解析到**它自己那台机器**。
+
+三条路，按推荐顺序：
+
+##### 方案 A：SSH 本地端口转发（推荐）
+
+把回调端口固定下来，配一条常驻隧道：
+
+```bash
+# 控制台「设置 → 浏览器登录回调端口」填 64361（0=随机，建议固定）
+# 然后在【你本机】执行并保持不断：
+ssh -N -L 64361:127.0.0.1:64361 user@your-server
+```
+
+之后点「打开授权页」，浏览器访问 `127.0.0.1:64361` 会被隧道送到服务器，
+整个流程和本地部署完全一样。控制台会直接把这条命令显示出来，可一键复制。
+
+##### 方案 B：粘贴回调 URL（无需隧道）
+
+1. 正常点「打开授权页」在本地浏览器完成登录
+2. 门户会把浏览器跳到 `http://127.0.0.1:<port>/oauth/callback?...`，
+   浏览器报「无法访问此网站」—— **但地址栏里的 URL 是完整的**
+3. 把那条 URL 整段复制，粘到控制台的「提交回调 URL」
+
+网关会**自己把剩下的重定向链走完**（含门户的两跳
+`?secret=&redirect=` → `?code=`）并取出授权码。
+
+##### 方案 C：本地登录 + 导出 session JSON
+
+在任意一台 Windows 机器（或本地跑一个网关实例）完成登录，
+按 [3.2](#32-导出-session-json) 导出，再导进服务器。
+**不需要任何隧道**，而且导入后仍能自动续期。
+
+> 💡 另外：如果你只是想要一个能用的凭据，方案 C 最省事 ——
+> 毕竟会话本来就是可移植的（带 refresh_token + DPoP 私钥）。
 
 ### 3.4 续期策略
 
@@ -429,7 +476,8 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` 允许无密钥调用）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
 - **设置**：默认 / 强制模型、**允许积分模型开关**、**每日自动签到开关与时刻**、
-  超时、重试、日志条数、CORS、续期开关、上游身份头、模型别名、管理密码
+  **浏览器登录回调端口**、超时、重试、日志条数、CORS、续期开关、
+  上游身份头、模型别名、管理密码
 
 鉴权规则：设了管理密码就必须带 `X-Admin-Password`（或 `Authorization: Bearer`）；
 没设密码则只允许本机环回访问。所有写操作额外做同源校验。
@@ -461,7 +509,8 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | POST | `/admin/api/invite` | 生成专属邀请码与邀请链接（奖励仍需好友真实注册） |
 | POST | `/admin/api/models/refresh` | 从上游刷新模型清单 |
 | GET | `/admin/api/balance` | 查询免费额度余额 |
-| POST | `/admin/api/login/start` | **启动浏览器登录**，返回授权 URL |
+| POST | `/admin/api/login/start` | **启动浏览器登录**，返回授权 URL + 回调地址 + SSH 隧道命令 |
+| POST | `/admin/api/login/callback` | **提交手工粘贴的回调 URL**（远端部署无隧道时用） |
 | POST | `/admin/api/login/poll` | 轮询登录状态，成功后自动入库 |
 | POST | `/admin/api/login/cancel` | 取消浏览器登录 |
 

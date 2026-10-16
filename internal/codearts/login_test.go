@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -130,7 +131,7 @@ func TestBuildAuthorizeURL(t *testing.T) {
 
 func TestListenCallbackPortInRange(t *testing.T) {
 	for i := 0; i < 5; i++ {
-		ln, err := listenCallback()
+		ln, err := listenCallback(0)
 		if err != nil {
 			t.Fatalf("listenCallback: %v", err)
 		}
@@ -147,6 +148,86 @@ func TestListenCallbackPortInRange(t *testing.T) {
 			t.Errorf("端口 %d 小于下限 %d（门户侧要求 ≥10000）", port, minCallbackPort)
 		}
 	}
+}
+
+// TestListenCallbackFixedPort 验证远端部署场景下能固定回调端口
+// （固定端口才能配一条常驻的 SSH 本地转发）。
+func TestListenCallbackFixedPort(t *testing.T) {
+	// 先拿一个空闲端口
+	probe, err := listenCallback(0)
+	if err != nil {
+		t.Fatalf("listenCallback(0): %v", err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+
+	ln, err := listenCallback(port)
+	if err != nil {
+		t.Fatalf("listenCallback(%d): %v", port, err)
+	}
+	defer ln.Close()
+	if got := ln.Addr().(*net.TCPAddr).Port; got != port {
+		t.Errorf("固定端口未生效: 期望 %d，实际 %d", port, got)
+	}
+
+	// 低于下限必须被拒绝（门户侧要求 ≥10000）
+	if _, err := listenCallback(9999); err == nil {
+		t.Error("端口低于 10000 应报错")
+	}
+}
+
+// TestIsOwnCallback 验证回调 URL 归属判断（OOB 粘贴模式的入口）。
+func TestIsOwnCallback(t *testing.T) {
+	f := &LoginFlow{Port: 64361}
+	cases := map[string]bool{
+		"http://127.0.0.1:64361/oauth/callback?code=X":  true,
+		"http://localhost:64361/oauth/callback?code=X":  true,
+		"http://127.0.0.1:64361/oauth/callback":         true,
+		"http://127.0.0.1:12345/oauth/callback?code=X":  false, // 端口不符
+		"http://127.0.0.1:64361/other?code=X":           false, // 路径不符
+		"https://codearts.huaweicloud.com/portal/login": false,
+		"https://evil.example.com/oauth/callback":       false,
+	}
+	for raw, want := range cases {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		if got := f.isOwnCallback(u); got != want {
+			t.Errorf("isOwnCallback(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestChaseCallbackPicksCodeFromPastedURL 验证 OOB 模式下能直接从粘贴的
+// 回调 URL 里取出授权码（不依赖网络）。
+func TestChaseCallbackPicksCodeFromPastedURL(t *testing.T) {
+	f := &LoginFlow{Port: 64361, client: NewClient()}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code, err := f.chaseCallback(ctx, "http://127.0.0.1:64361/oauth/callback?code=THECODE&state=x")
+	if err != nil {
+		t.Fatalf("chaseCallback: %v", err)
+	}
+	if code != "THECODE" {
+		t.Errorf("code = %q", code)
+	}
+}
+
+// TestChaseCallbackRejectsLegacySecret 旧版回调（只带 secret）要给出明确指引，
+// 而不是静默失败。
+func TestChaseCallbackRejectsLegacySecret(t *testing.T) {
+	f := &LoginFlow{Port: 64361, client: NewClient()}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := f.chaseCallback(ctx, "http://127.0.0.1:64361/oauth/callback?secret=abc&redirect=https://x/y")
+	// secret+redirect 会先跟随 redirect（网络不可达），错误信息里应提示重新发起
+	if err == nil {
+		t.Fatal("应报错")
+	}
+	t.Logf("错误信息: %v", err)
 }
 
 // TestLoginCallbackTwoHops 验证回调服务器的两跳行为与 IDE 一致：

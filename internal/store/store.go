@@ -51,6 +51,11 @@ type Settings struct {
 	LiveTTLSeconds int `json:"live_ttl_sec"`
 	// UserDataDir 是 CodeArts Agent 的 User Data 目录（留空自动探测）。
 	UserDataDir string `json:"user_data_dir"`
+	// LoginPort 固定浏览器登录的回调端口（0 = 随机 ≥10000）。
+	//
+	// 远端部署时固定它，就能配一条常驻 SSH 本地转发：
+	//     ssh -N -L <LoginPort>:127.0.0.1:<LoginPort> user@server
+	LoginPort int `json:"login_port"`
 
 	// 上游身份头（留空用与 26.9.902 对齐的缺省值）
 	PluginName    string `json:"plugin_name"`
@@ -169,6 +174,10 @@ func (s *Store) applyDefaults() {
 	}
 	if st.ClaimAfterMinute < 0 || st.ClaimAfterMinute > 59 {
 		st.ClaimAfterMinute = def.ClaimAfterMinute
+	}
+	// 回调端口要么不固定（0），要么落在门户要求的区间内
+	if st.LoginPort != 0 && (st.LoginPort < 10000 || st.LoginPort > 65535) {
+		st.LoginPort = 0
 	}
 	if st.PluginName == "" {
 		st.PluginName = def.PluginName

@@ -183,6 +183,30 @@
             <button class="btn danger" id="loginCancel" style="margin-top:8px">取消</button>
           </div>
         </div>
+
+        <div class="card" style="margin:12px 0 0;background:var(--panel2)">
+          <h2>远端部署（服务器上的网关 + 本地浏览器）</h2>
+          <div class="hint" style="margin-top:0">
+            回调地址固定是 <code id="loginCallback">—</code> —— 浏览器会把它解析到<b>你自己这台机器</b>，
+            所以远端部署时下面两条路任选一条：
+          </div>
+
+          <label>方案 A：SSH 本地端口转发（推荐，之后浏览器会自动跳回）</label>
+          <div class="row">
+            <input id="loginTunnel" readonly style="flex:1;min-width:320px" onclick="this.select()">
+            <button class="btn" id="copyTunnel">复制</button>
+          </div>
+          <div class="hint">在<b>你本机</b>执行这条命令并保持不断，然后点「打开授权页」即可。</div>
+
+          <label>方案 B：无隧道 —— 把浏览器最终停在的地址粘回来</label>
+          <div class="row">
+            <input id="loginPasted" placeholder="http://127.0.0.1:xxxxx/oauth/callback?code=..." style="flex:1;min-width:320px">
+            <button class="btn primary" id="loginSubmit">提交回调 URL</button>
+          </div>
+          <div class="hint">
+            登录后浏览器会停在「无法访问此网站」，<b>但地址栏里的 URL 是完整的</b> —— 整条复制粘到上面。
+          </div>
+        </div>
       </div>
       <div class="row" style="margin-bottom:12px">
         <input id="manualName" placeholder="账号名称（可选）" style="width:180px">
@@ -242,6 +266,7 @@
         <div><label>IDE 会话重读间隔（秒）</label><input id="sLiveTTL" type="number" min="1"></div>
         <div><label>CORS 允许来源（逗号分隔，留空=仅本机）</label><input id="sCors" placeholder="http://192.168.1.10:8080"></div>
         <div><label>CodeArts Agent User Data 目录（留空自动探测）</label><input id="sUserData" placeholder="%APPDATA%\codearts-agent"></div>
+        <div><label>浏览器登录回调端口（0=随机；远端部署建议固定，如 64361）</label><input id="sLoginPort" type="number" min="0" max="65535" placeholder="0"></div>
       </div>
 
       <label>计费与通道</label>
@@ -577,6 +602,7 @@
     $("#sLiveTTL").value = s.live_ttl_sec || "";
     $("#sCors").value = s.cors_origin || "";
     $("#sUserData").value = s.user_data_dir || "";
+    $("#sLoginPort").value = s.login_port || 0;
     $("#sAllowCredit").checked = !!s.allow_credit_models;
     $("#sAutoClaim").checked = !!s.auto_claim;
     $("#sClaimHour").value = (s.claim_after_hour === undefined ? 0 : s.claim_after_hour);
@@ -749,9 +775,11 @@
   }
 
   // setLoginURL 把授权地址写进只读输入框，并只在通过白名单时才挂到链接上。
-  function setLoginURL(raw){
+  function setLoginURL(raw, callback, tunnel){
     var ok = isTrustedAuthURL(raw);
     $("#loginURL").value = raw || "";
+    $("#loginCallback").textContent = callback || "—";
+    $("#loginTunnel").value = tunnel || "";
     var a = $("#loginLink");
     if (ok) {
       a.href = raw;
@@ -823,7 +851,8 @@
   };
   $("#browserLogin").onclick = function(){
     api("/admin/api/login/start", {method:"POST", body:{}}).then(function(r){
-      setLoginURL(r.auth_url);
+      setLoginURL(r.auth_url, r.callback, r.tunnel_hint);
+      $("#loginPasted").value = "";
       $("#loginStatus").textContent = "等待在浏览器里完成登录…";
       $("#loginPanel").style.display = "block";
       stopLogin();
@@ -847,6 +876,23 @@
   $("#closeExport").onclick = function(){
     $("#exportJSON").value = "";
     $("#exportPanel").style.display = "none";
+  };
+  $("#loginSubmit").onclick = function(){
+    var u = $("#loginPasted").value.trim();
+    if (!u) { toast("请把浏览器地址栏里那条回调 URL 粘进来", "err"); return; }
+    if (!loginSid) { toast("登录会话已失效，请重新点击「浏览器登录」", "err"); return; }
+    api("/admin/api/login/callback", {method:"POST", body:{session_id:loginSid, url:u}}).then(function(){
+      $("#loginStatus").textContent = "已收到授权码，正在换取凭据…";
+      $("#loginPasted").value = "";
+      pollLogin();
+    }).catch(function(e){ toast("提交失败：" + e.message, "err"); });
+  };
+  $("#copyTunnel").onclick = function(){
+    var el = $("#loginTunnel");
+    if (!el.value) { toast("请先点击「浏览器登录」", "err"); return; }
+    el.select();
+    try { document.execCommand("copy"); toast("已复制 SSH 隧道命令", "ok"); }
+    catch(e){ toast("请手动复制", "err"); }
   };
   $("#loginCancel").onclick = function(){
     if (loginSid) api("/admin/api/login/cancel", {method:"POST", body:{session_id:loginSid}}).catch(function(){});
@@ -899,6 +945,7 @@
       live_ttl_sec: parseInt($("#sLiveTTL").value, 10) || 0,
       cors_origin: $("#sCors").value.trim(),
       user_data_dir: $("#sUserData").value.trim(),
+      login_port: parseInt($("#sLoginPort").value, 10) || 0,
       allow_credit_models: $("#sAllowCredit").checked,
       auto_claim: $("#sAutoClaim").checked,
       claim_after_hour: parseInt($("#sClaimHour").value, 10) || 0,

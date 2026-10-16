@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/invite", s.withAdminAuth(s.handleAdminInvite))
 	mux.HandleFunc("/admin/api/login/start", s.withAdminAuth(s.handleAdminLoginStart))
 	mux.HandleFunc("/admin/api/login/poll", s.withAdminAuth(s.handleAdminLoginPoll))
+	mux.HandleFunc("/admin/api/login/callback", s.withAdminAuth(s.handleAdminLoginCallback))
 	mux.HandleFunc("/admin/api/login/cancel", s.withAdminAuth(s.handleAdminLoginCancel))
 
 	mux.HandleFunc("/", s.handleRoot)
@@ -289,6 +290,7 @@ func sanitizedSettings(st store.Settings) map[string]any {
 		"write_back_to_ide":   st.WriteBackToIDE,
 		"live_ttl_sec":        st.LiveTTLSeconds,
 		"user_data_dir":       st.UserDataDir,
+		"login_port":          st.LoginPort,
 		"plugin_name":         st.PluginName,
 		"plugin_version":      st.PluginVersion,
 		"ide_name":            st.IDEName,

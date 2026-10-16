@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"codearts2api/internal/codearts"
@@ -68,6 +70,7 @@ func (s *Server) handleAdminLoginStart(w http.ResponseWriter, r *http.Request) {
 	flow, err := s.Logins.Start(codearts.LoginOptions{
 		PortalHost: body.PortalHost,
 		Locale:     body.Locale,
+		Port:       st.LoginPort,
 		// 上游身份头里的 ide-version 就是 CodeArts Agent 的版本，登录时上报同一个值
 		PluginVersion: st.IDEVersion,
 	})
@@ -76,12 +79,14 @@ func (s *Server) handleAdminLoginStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":         true,
-		"session_id": flow.ID,
-		"auth_url":   flow.AuthURL,
-		"port":       flow.Port,
-		"expires_in": int(5 * time.Minute / time.Second),
-		"hint":       "回调地址是 127.0.0.1，请在**本机**浏览器里完成登录",
+		"ok":          true,
+		"session_id":  flow.ID,
+		"auth_url":    flow.AuthURL,
+		"port":        flow.Port,
+		"callback":    "http://127.0.0.1:" + strconv.Itoa(flow.Port) + codearts.AuthRedirectPath,
+		"expires_in":  int(5 * time.Minute / time.Second),
+		"hint":        flow.CallbackHint(),
+		"tunnel_hint": "ssh -N -L " + strconv.Itoa(flow.Port) + ":127.0.0.1:" + strconv.Itoa(flow.Port) + " <user>@<server>",
 	})
 }
 
@@ -134,6 +139,42 @@ func (s *Server) handleAdminLoginPoll(w http.ResponseWriter, r *http.Request) {
 		resp["has_refresh"] = sess.HasRefresh()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAdminLoginCallback 接收用户手工粘贴的回调 URL（远端部署无隧道时的兜底）。
+func (s *Server) handleAdminLoginCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "仅支持 POST", "invalid_request_error")
+		return
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+		URL       string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求体解析失败", "invalid_request_error")
+		return
+	}
+	if body.SessionID == "" || strings.TrimSpace(body.URL) == "" {
+		writeErr(w, http.StatusBadRequest, "缺少 session_id 或 url", "invalid_request_error")
+		return
+	}
+	flow := s.Logins.Get(body.SessionID)
+	if flow == nil {
+		writeErr(w, http.StatusNotFound, "登录会话不存在或已过期，请重新发起登录", "invalid_request_error")
+		return
+	}
+	code, err := flow.SubmitCallbackURL(body.URL)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"accepted": true,
+		"code_len": len(code),
+		"message":  "已收到授权码，正在换取凭据…",
+	})
 }
 
 // handleAdminLoginCancel 取消一次登录。

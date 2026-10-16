@@ -74,6 +74,12 @@ type LoginOptions struct {
 	Timeout time.Duration
 	// OpenURL 是可选的浏览器打开回调（默认由调用方展示链接）。
 	OpenURL func(string)
+	// Port 指定回调端口（0 = 随机取一个 ≥10000 的端口）。
+	//
+	// 远端部署时把它固定下来，就能配一条常驻的 SSH 本地端口转发：
+	//     ssh -N -L <Port>:127.0.0.1:<Port> user@server
+	// 之后浏览器访问 127.0.0.1:<Port> 会被隧道送到服务器的回调服务器。
+	Port int
 }
 
 // LoginStatus 是一次登录流程的状态。
@@ -168,7 +174,7 @@ func (m *LoginManager) Start(opt LoginOptions) (*LoginFlow, error) {
 		return nil, err
 	}
 
-	ln, err := listenCallback()
+	ln, err := listenCallback(opt.Port)
 	if err != nil {
 		return nil, fmt.Errorf("无法在 127.0.0.1 上启动回调服务器: %w", err)
 	}
@@ -305,6 +311,105 @@ func (f *LoginFlow) exchange(code string) {
 		return
 	}
 	f.finish(LoginConfirmed, "登录成功", sess)
+}
+
+// CallbackHint 描述「浏览器打不开回调地址」时该怎么办。
+func (f *LoginFlow) CallbackHint() string {
+	return fmt.Sprintf("回调地址是 http://127.0.0.1:%d%s —— "+
+		"浏览器会把它解析到**你自己的机器**，因此远端部署时要么用 SSH 端口转发， "+
+		"要么把浏览器最终停在的那个地址粘贴回控制台（粘贴回调 URL）。", f.Port, AuthRedirectPath)
+}
+
+// SubmitCallbackURL 处理用户手工粘贴的回调 URL（远端部署、无隧道时的兜底）。
+//
+// 用户在自己的浏览器里完成登录后，门户会把浏览器 307 到
+// http://127.0.0.1:<port>/oauth/callback?...；如果那台机器上没有监听，
+// 浏览器会报「无法访问此网站」，但**地址栏里的 URL 是完整的**。
+// 把它粘过来，网关会自己把剩下的重定向链走完并取出授权码。
+func (f *LoginFlow) SubmitCallbackURL(raw string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	code, err := f.chaseCallback(ctx, raw)
+	if err != nil {
+		return "", err
+	}
+	go f.exchange(code)
+	return code, nil
+}
+
+// chaseCallback 从给定 URL 出发沿重定向链走到本机回调，取出授权码。
+func (f *LoginFlow) chaseCallback(ctx context.Context, raw string) (string, error) {
+	cur := strings.TrimSpace(raw)
+	if cur == "" {
+		return "", fmt.Errorf("回调 URL 为空")
+	}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		// 自己接管重定向，逐跳观察
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for hop := 1; hop <= 10; hop++ {
+		u, err := url.Parse(cur)
+		if err != nil {
+			return "", fmt.Errorf("第 %d 跳 URL 解析失败: %w", hop, err)
+		}
+		// 命中自己的回调服务器 → 直接读参数，不需要真的发 HTTP
+		if f.isOwnCallback(u) {
+			q := u.Query()
+			if c := q.Get("code"); c != "" {
+				return c, nil
+			}
+			if r := q.Get("redirect"); r != "" {
+				cur = r
+				continue
+			}
+			if q.Get("secret") != "" {
+				return "", fmt.Errorf("这是旧版登录回调（只带 secret），" +
+					"网关只支持新版授权码流程；请在面板重新发起一次浏览器登录")
+			}
+			return "", fmt.Errorf("回调 URL 里没有 code 参数")
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, cur, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "codearts2api/"+PluginVersion)
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("第 %d 跳请求失败: %w", hop, err)
+		}
+		loc := resp.Header.Get("Location")
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+
+		if loc == "" {
+			return "", fmt.Errorf("重定向链在第 %d 跳中断（HTTP %d，无 Location）。"+
+				"请在浏览器里打开授权页后，把**最终停在的那个地址**（含 code= 或 redirect= 参数）粘贴过来",
+				hop, resp.StatusCode)
+		}
+		next, err := u.Parse(loc)
+		if err != nil {
+			return "", fmt.Errorf("第 %d 跳 Location 解析失败: %w", hop, err)
+		}
+		cur = next.String()
+	}
+	return "", fmt.Errorf("重定向次数过多（>10），放弃")
+}
+
+// isOwnCallback 判断 URL 是否指向本流程的回调服务器。
+func (f *LoginFlow) isOwnCallback(u *url.URL) bool {
+	host := u.Hostname()
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return false
+	}
+	if u.Path != AuthRedirectPath {
+		return false
+	}
+	port := u.Port()
+	return port == "" || port == strconv.Itoa(f.Port)
 }
 
 // MarkSaved 原子地标记「已把账号写入账号池」，返回本次调用是否是第一次。
@@ -520,7 +625,13 @@ func pad32(v *big.Int) []byte {
 //
 // 与 IDE 的策略一致：先随机取；若落到 10000 以下，再显式挑一个
 // [10000, 65535) 的随机端口重试一次。
-func listenCallback() (net.Listener, error) {
+func listenCallback(fixed int) (net.Listener, error) {
+	if fixed > 0 {
+		if fixed < minCallbackPort {
+			return nil, fmt.Errorf("回调端口 %d 小于下限 %d（门户侧要求 ≥10000）", fixed, minCallbackPort)
+		}
+		return net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(fixed))
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err == nil {
 		if ln.Addr().(*net.TCPAddr).Port >= minCallbackPort {
