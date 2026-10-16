@@ -25,6 +25,7 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			"failures": a.Failures, "last_used": a.LastUsed,
 			"last_claim_date": a.LastClaimDate, "last_claim_at": a.LastClaimAt,
 			"last_claim_err": a.LastClaimErr,
+			"last_claim_msg": a.LastClaimMsg,
 			"claimed_today":  a.LastClaimDate == today,
 		}
 		if a.Session != nil {

@@ -8,7 +8,7 @@
 
 - 🎁 **免费福利 Token** —— 复用官方[限时领取 Tokens](https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html)活动，**每人每日 1000 万 Tokens**
 - 💳 **积分通道** —— 需要时也可调用 `glm-5.3` / `GLM-5.2` 等订阅模型（按积分计费，控制台可一键关闭）
-- 🔁 **每日自动签到** —— 内置定时领取免费福利 Token，IDE 没开 / 跨天 / 多账号都不漏
+- 🔁 **每日自动签到** —— 定时领取免费福利 Token **与每日积分**，IDE 没开 / 跨天 / 多账号都不漏
 - 🔐 **三种凭据来源** —— 桌面端登录态导入 / 本地浏览器登录（OAuth 回调）/ 手工录入
 - 🔌 **双协议** —— `/v1/chat/completions`（OpenAI）+ `/v1/messages`（Anthropic），含思维链与工具调用
 - 🖥️ **内嵌 Web 控制台** —— 账号池 / 密钥 / 日志 / 额度进度 / 模型通道一目了然
@@ -142,6 +142,10 @@ CodeArts 官方有一个**限时领取 Tokens** 活动：登录后客户端自�
 #### 每日自动签到
 
 网关内置**每日自动签到**，默认开启、每天 00:05 执行（可在控制台改时刻或关闭）。
+一次签到会同时处理两件事：
+
+1. **免费福利 Token** —— `GET /api/v1/benefit/claim`（就是上面这 1000 万 tokens）
+2. **活动福利积分** —— `GET /v1/ops/delivery` + `POST /v1/ops/claim`（见 [2.2](#22-活动福利积分)）
 
 官方活动页说明「登录成功后客户端会自动为你领取该福利」，所以 IDE 运行时其实
 已经替我们领了。网关的自动签到是这三种情况的兜底：
@@ -167,7 +171,49 @@ CodeArts 官方有一个**限时领取 Tokens** 活动：登录后客户端自�
 - **活动期限 / 变更**：官方保留随时终止或调整活动及其条款的权利，
   变更将通过更新活动页或其他通知形式告知。
 
-### 2.2 积分通道（计费）
+### 2.2 活动福利（积分）
+
+CodeArts 的「活动福利」是一套运营活动子系统（IDE 左下角入口）。
+实测（2026-10）线上共有三个 campaign：
+
+| campaignId | 活动 | 类型 | 奖励 | 触发事件 | 能否自动领取 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **每日签到领1000积分** | `USER_LOGIN` | 1000 积分 | `user.login` | ✅ **可以** |
+| 2 | 学生认证领4000积分 | `STUDENT_CERTIFIED` | 4000 积分 | `student.certified` | ❌ 需真实学生认证 |
+| 3 | 推荐码上有礼 | `INVITE_USER` | 1000 积分/人 | `invite.success` | ❌ 需真实好友注册 |
+
+接口：
+
+```text
+GET  /v1/ops/delivery?channel=IDE    列出活动与状态（claimable / status / pendingCount）
+POST /v1/ops/claim                   {campaignId, idempotentKey, channel:"IDE"}
+POST /v1/ops/invite/generate         {campaignId} 生成专属邀请码与邀请链接
+```
+
+**自动签到的边界**：网关只领**服务端明确标记 `claimable: true` 且靠时间推进**的活动。
+
+实测服务端对不能直接领的活动会明确拒绝：
+
+```jsonc
+// 每日签到：今天已领，等次日刷新
+{"code":40001,"message":"尚未到达权益刷新时间，暂时无法领取"}
+
+// 邀请活动：必须由真实事件触发
+{"code":40001,"message":"该活动类型需要先通过触发接口激活，无法直接领取"}
+```
+
+> ⚠️ **邀请奖励不会自动刷。** 邀请奖励必须由**真实好友通过你的专属链接完成注册**
+> 才会产生；学生认证奖励同理。自动刷邀请属于多账号恶意注册，
+> 活动条款明确禁止且涉嫌违法 —— 网关在代码层面就把 `INVITE_USER` /
+> `STUDENT_CERTIFIED` 排除在自动领取之外（有单元测试锁定这个不变量）。
+>
+> 网关能帮你做的是**生成并展示你的邀请链接**：控制台「概览 → 生成我的邀请链接」，
+> 或 `POST /admin/api/invite`。
+>
+> 💡 注意参与条件：如果你用的是 **Tokens 制套餐**，需要先免费变更为**积分制套餐**
+> 才能参与活动（IDE 侧对应「活动福利」入口的提示）。
+
+### 2.3 积分通道（计费）
 
 需要订阅 / 企业套餐，按上游返回的 `credit[].ratio_display` 倍率扣积分：
 
@@ -206,7 +252,7 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 
 > 如果你要跑高并发，建议在控制台多导入几个账号，网关会自动轮询并在失败时换号。
 
-### 2.3 模型别名
+### 2.4 模型别名
 
 内置别名（可在控制台改成任意映射）：
 
@@ -218,7 +264,7 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 别名会继承目标模型的通道。**无法识别的模型名默认落到免费额度通道** ——
 宁可报错，也不静默扣积分。
 
-### 2.4 模型清单接口
+### 2.5 模型清单接口
 
 `GET /v1/models` 会在 `codearts` 扩展字段里带上通道与计费信息：
 
@@ -323,7 +369,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 <http://127.0.0.1:10087/>，单文件、无外部依赖、可离线使用。
 
-- **概览**：请求统计、今日免费额度进度条、今日签到 n/m、模型清单（含通道与积分倍率）、一键刷新模型
+- **概览**：请求统计、今日免费额度进度条、今日签到 n/m、**活动福利列表与邀请链接**、模型清单（含通道与积分倍率）、一键刷新模型
 - **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / 探活 / **签到** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日签到」状态
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` 允许无密钥调用）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
@@ -355,7 +401,9 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
 | POST | `/admin/api/checkin` | 账号连通性探活（永远走免费通道，不扣积分） |
-| POST | `/admin/api/claim` | **每日签到领福利 Token**（全部账号或指定 `id`） |
+| POST | `/admin/api/claim` | **每日签到**：免费福利 Token + 活动福利积分（全部账号或指定 `id`） |
+| GET | `/admin/api/welfare` | 运营活动清单与可领取状态 |
+| POST | `/admin/api/invite` | 生成专属邀请码与邀请链接（奖励仍需好友真实注册） |
 | POST | `/admin/api/models/refresh` | 从上游刷新模型清单 |
 | GET | `/admin/api/balance` | 查询免费额度余额 |
 | POST | `/admin/api/login/start` | **启动浏览器登录**，返回授权 URL |
@@ -385,6 +433,7 @@ CodeArts2API/
 │  │  ├─ refresh.go            # DPoP(ES256 JWS) 续期
 │  │  ├─ login.go              # 本地浏览器登录（OAuth PKCE + 回调服务器）
 │  │  ├─ benefit.go            # 每日免费福利 Token 领取
+│  │  ├─ welfare.go            # 运营活动（每日积分 / 邀请码）
 │  │  ├─ sse.go                # SSE 聚合（流式→非流式兜底）+ 错误分类
 │  │  ├─ manager.go            # 凭据解析与续期编排
 │  │  └─ debug.go              # state.vscdb 键名转储

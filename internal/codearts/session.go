@@ -178,6 +178,7 @@ type Account struct {
 	LastClaimDate string `json:"last_claim_date,omitempty"`
 	LastClaimAt   int64  `json:"last_claim_at,omitempty"`
 	LastClaimErr  string `json:"last_claim_err,omitempty"`
+	LastClaimMsg  string `json:"last_claim_msg,omitempty"`
 	// 缓存的凭据（含 refresh_token 与 DPoP 私钥），用于 IDE 未运行时的续期
 	Session *Session `json:"session,omitempty"`
 }

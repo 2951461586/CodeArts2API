@@ -340,6 +340,7 @@ func (s *Store) MarkClaimResult(id, date string, ok bool, msg string) {
 		if ok {
 			a.LastClaimDate = date
 			a.LastClaimErr = ""
+			a.LastClaimMsg = msg
 		} else {
 			a.LastClaimErr = msg
 		}

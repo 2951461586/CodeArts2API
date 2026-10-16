@@ -102,6 +102,30 @@
       </div>
     </div>
     <div class="card">
+      <h2>活动福利（运营活动）</h2>
+      <div class="row" style="margin-bottom:12px">
+        <button class="btn" id="loadWelfare">刷新活动列表</button>
+        <button class="btn" id="claimWelfareNow">领取可领奖励</button>
+        <button class="btn" id="genInvite">生成我的邀请链接</button>
+        <span class="hint" style="margin:0" id="welfareHint"></span>
+      </div>
+      <table><thead><tr><th>活动</th><th>类型</th><th>奖励</th><th>状态</th><th>可自动领取</th><th>触发方式</th><th>有效期</th></tr></thead>
+      <tbody id="welfare"></tbody></table>
+      <div class="hint">
+        只有<b>靠时间推进</b>的活动（如「每日签到领1000积分」）可以自动领取；
+        <b>邀请</b>与<b>学生认证</b>类必须由真实事件触发，服务端会直接拒绝直接领取。
+      </div>
+      <div class="card" id="invitePanel" style="display:none;margin-top:12px">
+        <h2>我的邀请链接</h2>
+        <div class="row">
+          <input id="inviteURL" readonly style="flex:1;min-width:320px" onclick="this.select()">
+          <button class="btn" id="copyInvite">复制</button>
+        </div>
+        <div class="hint" id="inviteStat"></div>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>模型</h2>
       <div class="row" style="margin-bottom:12px">
         <button class="btn" id="refreshModels">从上游刷新模型清单</button>
@@ -449,6 +473,7 @@
       } else {
         claimCell.appendChild(pill("未领", "warn"));
       }
+      if (a.last_claim_msg) claimCell.title = a.last_claim_msg;
       if (a.last_claim_err) claimCell.title = a.last_claim_err;
 
       var ops = cell("");
@@ -630,6 +655,47 @@ AK " + r.access_key : ""), "ok");
     }).catch(function(e){ stopLogin(); toast("轮询失败：" + e.message, "err"); });
   }
 
+  var WELFARE_STATUS = {
+    ELIGIBLE:  ["可领取", "ok"],
+    CLAIMED:   ["已领取", "warn"],
+    CONFIRMED: ["已到账", "ok"],
+    CONSUMED:  ["已使用", ""],
+    ENTRY:     ["需先完成前置", "warn"]
+  };
+
+  function renderWelfare(campaigns){
+    var tb = $("#welfare");
+    tb.textContent = "";
+    if (!campaigns || !campaigns.length) { tb.appendChild(emptyRow(7, "暂无活动")); return; }
+    campaigns.forEach(function(c){
+      var st = WELFARE_STATUS[c.status] || [c.status || "—", ""];
+      var stCell = cell(""); stCell.appendChild(pill(st[0], st[1]));
+
+      var autoCell = cell("");
+      autoCell.appendChild(c.auto_claimable ? pill("是", "ok") : pill("否", ""));
+
+      var reward = c.benefit_amount ? (c.benefit_amount + " " + (c.benefit_unit || "")) : "—";
+      var period = (c.start_time || "").slice(0,10) + " ~ " + (c.end_time || "").slice(0,10);
+
+      tb.appendChild(row([
+        cell(c.title), cell(c.type, "mono"), cell(reward, "mono"),
+        stCell, autoCell, cell(c.trigger_event || c.trigger_mode || "—", "mono"),
+        cell(period, "muted")
+      ]));
+    });
+  }
+
+  function loadWelfare(){
+    $("#welfareHint").textContent = "加载中…";
+    return api("/admin/api/welfare").then(function(r){
+      renderWelfare(r.campaigns);
+      $("#welfareHint").textContent = "账号：" + (r.account || "");
+    }).catch(function(e){
+      $("#welfareHint").textContent = "";
+      toast("获取活动列表失败：" + e.message, "err");
+    });
+  }
+
   // --- events ---
   document.querySelectorAll("nav button").forEach(function(b){
     b.onclick = function(){
@@ -638,6 +704,7 @@ AK " + r.access_key : ""), "ok");
       b.classList.add("on");
       $("#tab-" + b.dataset.tab).classList.add("on");
       if (b.dataset.tab === "logs") refreshLogs();
+      if (b.dataset.tab === "overview") loadWelfare();
     };
   });
 
@@ -667,6 +734,24 @@ AK " + r.access_key : ""), "ok");
   };
   $("#checkinAll").onclick = function(){ checkin(null); };
   $("#claimAll").onclick = function(){ claim(null); };
+  $("#loadWelfare").onclick = loadWelfare;
+  $("#claimWelfareNow").onclick = function(){ claim(null).then(loadWelfare); };
+  $("#genInvite").onclick = function(){
+    toast("生成中…");
+    api("/admin/api/invite", {method:"POST", body:{}}).then(function(r){
+      $("#inviteURL").value = r.invite_url || "";
+      $("#inviteStat").textContent = "已激活 " + (r.activation_count||0) + " / " + (r.max_activations||0) +
+        " 次 · 状态 " + (r.status||"") + " · 账号 " + (r.account||"");
+      $("#invitePanel").style.display = "block";
+      toast("已生成邀请链接", "ok");
+    }).catch(function(e){ toast("生成失败：" + e.message, "err"); });
+  };
+  $("#copyInvite").onclick = function(){
+    var el = $("#inviteURL");
+    el.select();
+    try { document.execCommand("copy"); toast("已复制", "ok"); }
+    catch(e){ toast("请手动复制", "err"); }
+  };
   $("#browserLogin").onclick = function(){
     api("/admin/api/login/start", {method:"POST", body:{}}).then(function(r){
       $("#loginURL").value = r.auth_url;

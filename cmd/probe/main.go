@@ -56,6 +56,7 @@ func main() {
 	benefit := showBenefit(ctx, client, sess)
 	showBuiltin(ctx, client, sess)
 	showBalance(ctx, client, sess)
+	showWelfare(ctx, client, sess)
 
 	if *model == "" {
 		return
@@ -142,6 +143,38 @@ func showBalance(ctx context.Context, c *codearts.Client, sess *codearts.Session
 	}
 	fmt.Printf("  通道 %s：今日 %d / %d，剩余 %d\n",
 		bal.Channel, bal.DailyTokensUsed, bal.DailyTokenLimit, bal.TotalBalance)
+}
+
+// showWelfare 列出运营活动（「活动福利」）及可领取状态。
+func showWelfare(ctx context.Context, c *codearts.Client, sess *codearts.Session) {
+	fmt.Println("\n== 运营活动（活动福利）==")
+	d, err := c.FetchWelfareDelivery(ctx, sess)
+	if err != nil {
+		fmt.Println("  失败:", err)
+		return
+	}
+	for _, w := range d.Campaigns {
+		auto := "否"
+		if w.IsAutoClaimable() {
+			auto = "是"
+		}
+		fmt.Printf("  - id=%-2d %-22s type=%-18s status=%-10s 可领=%-5v 可自动=%s\n",
+			w.CampaignID, w.Title, w.Type, w.Status, w.Claimable, auto)
+		fmt.Printf("        奖励 %.0f %s  触发 %s  有效期 %s ~ %s\n",
+			w.BenefitAmount, w.BenefitUnit, w.Extra.TriggerEvent,
+			cut10(w.Extra.StartTime), cut10(w.Extra.EndTime))
+	}
+	if len(d.Claimable()) == 0 {
+		fmt.Println("  （当前没有可自动领取的活动）")
+	}
+}
+
+// cut10 截取时间串前 10 位（日期部分）。
+func cut10(s string) string {
+	if len(s) > 10 {
+		return s[:10]
+	}
+	return s
 }
 
 // channelFor 判断某模型名该走哪条通道：

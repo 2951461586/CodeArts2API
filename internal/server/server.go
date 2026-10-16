@@ -69,6 +69,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/models/refresh", s.withAdminAuth(s.handleAdminRefreshModels))
 	mux.HandleFunc("/admin/api/balance", s.withAdminAuth(s.handleAdminBalance))
 	mux.HandleFunc("/admin/api/claim", s.withAdminAuth(s.handleAdminClaim))
+	mux.HandleFunc("/admin/api/welfare", s.withAdminAuth(s.handleAdminWelfare))
+	mux.HandleFunc("/admin/api/invite", s.withAdminAuth(s.handleAdminInvite))
 	mux.HandleFunc("/admin/api/login/start", s.withAdminAuth(s.handleAdminLoginStart))
 	mux.HandleFunc("/admin/api/login/poll", s.withAdminAuth(s.handleAdminLoginPoll))
 	mux.HandleFunc("/admin/api/login/cancel", s.withAdminAuth(s.handleAdminLoginCancel))

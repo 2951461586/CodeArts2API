@@ -389,7 +389,82 @@ app.get("/oauth/callback", async (req, res) => {
 登录成功后可再调 `GET https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity`
 补全账号名与 domain id（`getUserInfo()` 用的就是这个）。
 
-### 3.9 续期流程（代码已确认，未实跑）
+### 3.9 运营活动子系统（「活动福利」）
+
+复刻 `out/extension.js` 里的 `s6i`：
+
+```js
+getWelfareDelivery: async () => {
+  // Tokens 制套餐不参与
+  if (subscription?.package?.is_token_package === true) return {code:0, data:{items:[]}};
+  const headers = { "x-snap-traceid", "x-auth-token", "Agent-Type": "PromptCenter", "X-Language" };
+  GET ${policyCenterDomain}/v1/ops/delivery?channel=IDE
+}
+
+claimWelfare: async (t, e) => {
+  const { campaignId, idempotentKey } = e?.value ?? e ?? {};
+  POST ${policyCenterDomain}/v1/ops/claim
+  data: { campaignId, idempotentKey, channel: "IDE" }        // 幂等
+}
+
+generateInviteCode: async (t, e) => {
+  const { campaignId } = e?.value ?? e ?? {};
+  POST ${policyCenterDomain}/v1/ops/invite/generate
+  data: { campaignId }
+}
+```
+
+商业版（无 `PromptCenterService` 前缀）实测线上三个 campaign：
+
+```text
+GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/ops/delivery?channel=IDE
+→ {"code":0,"message":"ok","data":{"items":[
+     {"campaignId":3,"title":"推荐码上有礼","type":"INVITE_USER",
+      "benefitAmount":1000,"benefitUnit":"CREDIT","status":"CLAIMED","claimable":false,
+      "extra":{"triggerMode":"MANUAL_CLAIM","triggerEvent":"invite.success",
+               "startTime":"2026-09-22T16:00:00Z","endTime":"2026-11-15T16:00:00Z"}},
+     {"campaignId":2,"title":"学生认证领4000积分","type":"STUDENT_CERTIFIED", ...},
+     {"campaignId":1,"title":"每日签到领1000积分","type":"USER_LOGIN",
+      "benefitAmount":1000,"benefitUnit":"CREDIT","status":"CLAIMED","claimable":false,
+      "extra":{"triggerMode":"MANUAL_CLAIM","triggerEvent":"user.login",
+               "startTime":"2026-09-08T16:00:00Z","endTime":"2026-12-30T16:00:00Z"}}]}}
+```
+
+状态机：`ELIGIBLE`（可领）→ `CLAIMED`（已领）→ `CONFIRMED`（已到账）→ `CONSUMED`（已用）；
+`claimable` 仅在 `ELIGIBLE` 时为真。
+
+**领取的边界（重要）**：
+
+```text
+POST /v1/ops/claim  {"campaignId":1,...}
+→ {"code":40001,"message":"尚未到达权益刷新时间，暂时无法领取"}      ← 每日签到，今天已领
+
+POST /v1/ops/claim  {"campaignId":3,...}
+→ {"code":40001,"message":"该活动类型需要先通过触发接口激活，无法直接领取"}  ← 邀请，需真实事件
+```
+
+也就是说：
+
+| campaign | 触发方式 | 能否自动化 |
+| --- | --- | --- |
+| `USER_LOGIN`（每日签到） | 每天时间推进 | ✅ 可以，服务端到点会把 status 置为 ELIGIBLE |
+| `INVITE_USER`（邀请） | `invite.success` —— 好友**真实注册** | ❌ 服务端拒绝直接领取 |
+| `STUDENT_CERTIFIED` | `student.certified` —— **真实学生认证** | ❌ 同上 |
+
+因此实现上**只领服务端标记 claimable 且靠时间推进的活动**，
+并在代码层面把 `INVITE_USER` / `STUDENT_CERTIFIED` 硬排除（有单测锁定）——
+自动刷邀请属于多账号恶意注册，活动条款明确禁止。
+
+邀请链接本身是合法的，可以生成：
+
+```text
+POST /v1/ops/invite/generate  {"campaignId":3}
+→ {"code":0,"data":{"inviteCode":"INV-...","inviteUrl":"https://devcloud...",
+                    "status":"ACTIVE","valid":true,
+                    "activationCount":2,"maxActivations":50}}
+```
+
+### 3.10 续期流程（代码已确认，未实跑）
 
 `extensions/huaweicloud.authentication/dist/plugin.js`
 
@@ -506,6 +581,7 @@ CodeArts2API/
 | §7.10 并发上限属临时故障 | `codearts/sse.go` + `server/chat.go` | `TestIsTransientUpstream` |
 | §3.7.1 每日签到接口 | `codearts/benefit.go` + `server/claim.go` | `TestDescribeClaimError` |
 | §3.8 浏览器登录 | `codearts/login.go` + `server/login.go` | `TestPKCEPairShape`、`TestBuildAuthorizeURL`、`TestLoginCallbackTwoHops`、`TestListenCallbackPortInRange` |
+| §3.9 活动福利（每日积分 / 邀请） | `codearts/welfare.go` + `server/claim.go` | `TestIsAutoClaimableSafetyInvariant`、`TestWelfareDeliveryParse` |
 | §3.8 DPoP 密钥绑定 | `refresh.go` | `TestJWKThumbprintMatchesRefreshTokenBinding`（比对 `cnf.jkt`） |
 | 回写安全性 | `sqlite.go` + `session_windows.go` | `TestPatchItemValueRoundTrip`、`TestWriteBackSessionRoundTrip` |
 

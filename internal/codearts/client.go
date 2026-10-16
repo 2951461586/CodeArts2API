@@ -39,6 +39,14 @@ const (
 	BenefitGatewayConfigPath = "/v1/benefit-gateway-config"
 	// BenefitClaimPath 是每日免费福利 Token 的领取入口（幂等 GET）。
 	BenefitClaimPath = "/api/v1/benefit/claim"
+	// 运营活动（「活动福利」）相关入口，都需要 Agent-Type: PromptCenter。
+	//
+	// WelfareDeliveryPath 列出活动与可领取状态；
+	// WelfareClaimPath 领取指定 campaign（幂等，带 idempotentKey）；
+	// WelfareInvitePath 生成专属邀请码 / 邀请链接。
+	WelfareDeliveryPath = "/v1/ops/delivery"
+	WelfareClaimPath    = "/v1/ops/claim"
+	WelfareInvitePath   = "/v1/ops/invite/generate"
 
 	// PluginName / PluginVersion 等身份头，服务端会据此做路由与埋点。
 	// 缺省值与 CodeArts Agent 26.9.902 一致。
