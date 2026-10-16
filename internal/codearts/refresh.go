@@ -173,8 +173,7 @@ func (c *Client) Refresh(ctx context.Context, sess *Session) (*RefreshResult, er
 		}
 	}
 	if out.ExpiresAt.IsZero() {
-		// IAM 默认 2 小时，保守按 1 小时 50 分处理
-		out.ExpiresAt = time.Now().Add(110 * time.Minute)
+		out.ExpiresAt = time.Now().Add(DefaultCredentialTTL)
 	}
 	if out.RefreshToken == "" {
 		out.RefreshToken = sess.RefreshToken

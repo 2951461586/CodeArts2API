@@ -223,7 +223,7 @@ func ManualAccount(name, ak, sk, sts string, expires time.Time) (*Account, error
 		name = "手工录入 " + shortID(ak)
 	}
 	if expires.IsZero() {
-		expires = time.Now().Add(110 * time.Minute)
+		expires = time.Now().Add(DefaultCredentialTTL)
 	}
 	return &Account{
 		ID:      RandomHex(8),

@@ -530,7 +530,7 @@ func (c *Client) ExchangeAuthorizationCode(ctx context.Context, code string, pkc
 		}
 	}
 	if sess.ExpiresAt.IsZero() {
-		sess.ExpiresAt = time.Now().Add(110 * time.Minute)
+		sess.ExpiresAt = time.Now().Add(DefaultCredentialTTL)
 	}
 	// 补全账号信息（best-effort，失败不影响凭据可用性）
 	if id, name, domain, err := c.CallerIdentity(ctx, sess); err == nil {

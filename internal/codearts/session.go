@@ -35,14 +35,24 @@ type Session struct {
 	raw map[string]any
 }
 
+// DefaultCredentialTTL 是拿不到过期时间时的保守有效期估计。
+//
+// IAM 的 STS 临时凭据默认 2 小时，这里按 1 小时 50 分处理，给时钟偏差留余量。
+// 手工录入、浏览器登录、会话里缺 expires_at 时都用它。
+const DefaultCredentialTTL = 110 * time.Minute
+
 // Valid 报告凭据是否在 margin 之内仍然有效。
 func (s *Session) Valid(margin time.Duration) bool {
 	if s == nil || s.AccessKey == "" || s.SecretKey == "" {
 		return false
 	}
 	if s.ExpiresAt.IsZero() {
-		// 没有过期时间时按 STS 常规有效期（2 小时）保守估算
-		return true
+		// 没有过期时间就无从判断新鲜度，按「不可用」处理，
+		// 让 Manager 去续期或提示重新登录。
+		//
+		// 曾经这里直接 return true，等于「永不过期」—— 凭据实际已失效时
+		// 网关会一直拿着死凭据打上游，永远不触发续期。
+		return false
 	}
 	return time.Now().Add(margin).Before(s.ExpiresAt)
 }
@@ -161,6 +171,11 @@ func parseSession(plain []byte) (*Session, error) {
 		if t, err := parseTime(v); err == nil {
 			s.ExpiresAt = t
 		}
+	}
+	if s.ExpiresAt.IsZero() {
+		// 会话里没有（或无法解析）过期时间：按 STS 常规有效期保守估算，
+		// 这样 Valid() 不会把「无从判断」当成「永不过期」。
+		s.ExpiresAt = time.Now().Add(DefaultCredentialTTL)
 	}
 	if lc, ok := m["loginContext"].(map[string]any); ok {
 		s.CodeVerifier = str(nested(lc, "pkcePair"), "codeVerifier")
