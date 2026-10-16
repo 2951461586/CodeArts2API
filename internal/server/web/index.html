@@ -107,8 +107,10 @@
         <button class="btn" id="refreshModels">从上游刷新模型清单</button>
         <span class="hint" id="modelHint" style="margin:0"></span>
       </div>
-      <table><thead><tr><th>ID</th><th>名称</th><th>上下文</th><th>最大输出</th><th>来源</th><th>说明</th></tr></thead>
+      <table><thead><tr><th>ID</th><th>名称</th><th>通道</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
       <tbody id="models"></tbody></table>
+      <div class="hint"><b>免费额度</b>通道计入每日免费 token 额度（与 CodeArts Agent 共用）；
+        <b>积分</b>通道按积分计费，会产生真实消耗。</div>
     </div>
   </section>
 
@@ -178,6 +180,12 @@
         <div><label>CORS 允许来源（逗号分隔，留空=仅本机）</label><input id="sCors" placeholder="http://192.168.1.10:8080"></div>
         <div><label>CodeArts Agent User Data 目录（留空自动探测）</label><input id="sUserData" placeholder="%APPDATA%\codearts-agent"></div>
       </div>
+
+      <label>计费与通道</label>
+      <div class="row">
+        <label style="margin:0"><input type="checkbox" id="sAllowCredit" style="width:auto"> 允许调用积分（计费）通道的模型，如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro</label>
+      </div>
+      <div class="hint">关闭后只放行免费权益通道的模型。积分模型会在账号上产生真实消耗。</div>
 
       <label>凭据续期</label>
       <div class="row">
@@ -324,6 +332,8 @@
       ["输出字符", fmtNum(s.total_chars_out || 0)],
       ["账号（就绪/总）", ready + " / " + accts.length],
       ["密钥", (d.keys||[]).length],
+      ["积分模型", (d.models||[]).filter(function(m){ return m.channel === "credit"; }).length +
+        ((d.settings||{}).allow_credit_models ? " 已启用" : " 已关闭")],
       ["启动时间", fmtTime(s.started_at)]
     ];
     var box = $("#kpis");
@@ -343,15 +353,17 @@
     var tb = $("#models");
     tb.textContent = "";
     var models = d.models || [];
-    if (!models.length) { tb.appendChild(emptyRow(6, "无")); return; }
+    if (!models.length) { tb.appendChild(emptyRow(7, "无")); return; }
     models.forEach(function(m){
-      var src = m.source === "builtin" ? pill("订阅内置", "warn") : pill(m.source || "benefit", "ok");
-      var srcCell = cell(""); srcCell.appendChild(src);
+      var isCredit = m.channel === "credit";
+      var chCell = cell("");
+      chCell.appendChild(isCredit ? pill("积分", "warn") : pill("免费额度", "ok"));
       tb.appendChild(row([
-        cell(m.id, "mono"), cell(m.name),
+        cell(m.id, "mono"), cell(m.name), chCell,
+        cell(isCredit ? (m.credit || "—") : "—", "mono"),
         cell(m.context ? fmtNum(m.context) : "—", "mono"),
         cell(m.max_output ? fmtNum(m.max_output) : "—", "mono"),
-        srcCell, cell(m.description, "muted")
+        cell(m.description, "muted")
       ]));
     });
     $("#modelHint").textContent = d.upstream_error ? ("最近一次上游刷新失败：" + d.upstream_error) : "";
@@ -478,6 +490,7 @@
     $("#sLiveTTL").value = s.live_ttl_sec || "";
     $("#sCors").value = s.cors_origin || "";
     $("#sUserData").value = s.user_data_dir || "";
+    $("#sAllowCredit").checked = !!s.allow_credit_models;
     $("#sAutoRefresh").checked = !!s.auto_refresh;
     $("#sWriteBack").checked = !!s.write_back_to_ide;
     $("#sPluginName").value = s.plugin_name || "";
@@ -614,6 +627,7 @@
       live_ttl_sec: parseInt($("#sLiveTTL").value, 10) || 0,
       cors_origin: $("#sCors").value.trim(),
       user_data_dir: $("#sUserData").value.trim(),
+      allow_credit_models: $("#sAllowCredit").checked,
       auto_refresh: $("#sAutoRefresh").checked,
       write_back_to_ide: $("#sWriteBack").checked,
       plugin_name: $("#sPluginName").value.trim(),

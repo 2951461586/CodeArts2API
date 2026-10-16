@@ -274,6 +274,7 @@ func sanitizedSettings(st store.Settings) map[string]any {
 		"log_keep":            st.LogKeep,
 		"cors_origin":         st.CORSOrigin,
 		"auto_refresh":        st.AutoRefresh,
+		"allow_credit_models": st.AllowCreditModels,
 		"write_back_to_ide":   st.WriteBackToIDE,
 		"live_ttl_sec":        st.LiveTTLSeconds,
 		"user_data_dir":       st.UserDataDir,

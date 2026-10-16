@@ -325,6 +325,9 @@ CodeArts2API/
 | --- | --- | --- |
 | §3.5 签名两个坑 | `signer.go` | `TestCanonicalURIAddsTrailingSlash`、`TestSignRequestStableVector` |
 | §3.6 凭据加密 | `session_windows.go` | `TestReadItemValueFindsSecret` |
+| §3.7.1 两条通道路由 | `registry.go` + `client.go` | `TestChannelRouting` |
+| §3.7.2 glm-5.3 只支持流式 | `codearts/sse.go` + `server/chat.go` | `TestAggregateSSE*`、`TestIsEmptyRejection` |
+| §7.10 并发上限属临时故障 | `codearts/sse.go` + `server/chat.go` | `TestIsTransientUpstream` |
 | §3.8 DPoP 密钥绑定 | `refresh.go` | `TestJWKThumbprintMatchesRefreshTokenBinding`（比对 `cnf.jkt`） |
 | 回写安全性 | `sqlite.go` + `session_windows.go` | `TestPatchItemValueRoundTrip`、`TestWriteBackSessionRoundTrip` |
 
@@ -351,8 +354,15 @@ CodeArts2API/
 6. **上游错误可能是 HTTP 200**：未知模型返回
    `{"error_code":"4005","error_msg":"unsupported model"}`，必须识别，
    否则会被当成正常回复透传给客户端。
-7. **`snap-access.cn-north-4.myhuaweicloud.com` 有备用域名 `.cn`**，已做故障转移。
-8. **日志脱敏**：内核日志会把 `x-auth-token` 截断、`Authorization` 打码，说明官方
+7. **两条通道的计费完全不同**：不带 `maas_type` 就是积分通道，会真实扣费。
+   网关必须按模型自动选通道，且对**无法识别的模型名默认落到免费通道** ——
+   宁可报错，也不静默扣积分。
+8. **`snap-access.cn-north-4.myhuaweicloud.com` 有备用域名 `.cn`**，已做故障转移。
+9. **日志脱敏**：内核日志会把 `x-auth-token` 截断、`Authorization` 打码，说明官方
    自己也认为这些是敏感信息；网关的控制台与日志同样做了脱敏。
-9. **客户端断开不等于账号故障**：流式请求被客户端提前掐断时不应计入账号失败，
+10. **上游有并发上限**：每个账号 3 个并发会话，打满返回
+    `TM.00001041 并发会话数已达上限(3个)`。这属于**临时性故障**，
+    必须与「账号失效」区分开：退避重试即可，不能计入账号失败，
+    否则一次并发打满就会让健康账号被熔断。
+11. **客户端断开不等于账号故障**：流式请求被客户端提前掐断时不应计入账号失败，
    否则账号会被误判为不可用。

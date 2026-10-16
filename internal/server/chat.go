@@ -64,6 +64,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		modelName = settings.DefaultModel
 	}
 	model := s.Reg.Resolve(modelName, settings.ModelAliases)
+	if model.IsCredit() && !settings.AllowCreditModels {
+		writeErr(w, http.StatusForbidden,
+			"模型 "+model.ID+" 走积分（计费）通道，当前已在控制台关闭。如需使用请开启「允许积分模型」。",
+			"invalid_request_error")
+		return
+	}
 
 	upBody, err := rewriteModel(body, model.ID, req.Stream)
 	if err != nil {
@@ -93,7 +99,7 @@ func (s *Server) blockingChat(w http.ResponseWriter, r *http.Request, body []byt
 	)
 
 	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
-		res, err := s.chatOnce(ctx, acct, model.ID, body)
+		res, err := s.chatOnce(ctx, acct, model, body)
 		if err != nil {
 			return err
 		}
@@ -130,7 +136,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 	)
 
 	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
-		return s.streamOnce(ctx, acct, model.ID, body, func(chunk []byte) error {
+		return s.streamOnce(ctx, acct, model, body, func(chunk []byte) error {
 			if !started {
 				h := w.Header()
 				h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -180,30 +186,66 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 }
 
 // chatOnce 用指定账号发一次非流式请求。
-func (s *Server) chatOnce(ctx context.Context, acct *codearts.Account, model string, body []byte) ([]byte, error) {
+//
+// 上游对个别模型（实测 glm-5.3）的非流式接口只回一个空 body 的 400，
+// 这里检测到该特征后自动改用「流式 + 本地聚合」，对客户端保持非流式语义。
+func (s *Server) chatOnce(ctx context.Context, acct *codearts.Account, model registry.Model, body []byte) ([]byte, error) {
 	sess, err := s.Cred.Session(ctx, acct, s.resolveOptions())
 	if err != nil {
 		return nil, err
 	}
-	raw, err := s.Up.Chat(ctx, sess, model, body)
+
+	if model.StreamOnly {
+		return s.aggregateViaStream(ctx, sess, model, body)
+	}
+
+	raw, err := s.Up.Chat(ctx, sess, model.ID, model.Channel, body)
 	if err != nil {
+		if codearts.IsEmptyRejection(err) {
+			s.Reg.MarkStreamOnly(model.ID)
+			if agg, aerr := s.aggregateViaStream(ctx, sess, model, body); aerr == nil {
+				return agg, nil
+			} else {
+				return nil, aerr
+			}
+		}
 		return nil, err
 	}
 	if msg, bad := codearts.IsUpstreamBusinessError(raw); bad {
-		return nil, fmt.Errorf("上游错误: %s", msg)
+		return nil, codearts.UpstreamBusinessError(msg)
 	}
 	return raw, nil
 }
 
+// aggregateViaStream 用流式请求取回分片，再在本地聚合成一次性响应。
+func (s *Server) aggregateViaStream(ctx context.Context, sess *codearts.Session, model registry.Model, body []byte) ([]byte, error) {
+	streamBody, err := rewriteStream(body, true)
+	if err != nil {
+		return nil, err
+	}
+	var chunks [][]byte
+	err = s.Up.ChatStream(ctx, sess, model.ID, model.Channel, streamBody, func(chunk []byte) error {
+		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
+			return codearts.UpstreamBusinessError(msg)
+		}
+		chunks = append(chunks, append([]byte(nil), chunk...))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return codearts.AggregateSSE(chunks)
+}
+
 // streamOnce 用指定账号发一次流式请求，逐块回调。
-func (s *Server) streamOnce(ctx context.Context, acct *codearts.Account, model string, body []byte, onChunk func([]byte) error) error {
+func (s *Server) streamOnce(ctx context.Context, acct *codearts.Account, model registry.Model, body []byte, onChunk func([]byte) error) error {
 	sess, err := s.Cred.Session(ctx, acct, s.resolveOptions())
 	if err != nil {
 		return err
 	}
-	return s.Up.ChatStream(ctx, sess, model, body, func(chunk []byte) error {
+	return s.Up.ChatStream(ctx, sess, model.ID, model.Channel, body, func(chunk []byte) error {
 		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
-			return fmt.Errorf("上游错误: %s", msg)
+			return codearts.UpstreamBusinessError(msg)
 		}
 		return onChunk(chunk)
 	})
@@ -246,6 +288,18 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 		if ctx.Err() != nil {
 			break
 		}
+		// 临时性故障（并发上限 / 429 / 5xx）：账号本身没问题，退避后重试
+		if codearts.IsTransientUpstream(err) {
+			if i < maxTries-1 {
+				wait := time.Duration(300*(i+1)) * time.Millisecond
+				select {
+				case <-ctx.Done():
+					return used, lastErr
+				case <-time.After(wait):
+				}
+			}
+			continue
+		}
 		s.Store.MarkAccountResult(acct.ID, false, err.Error())
 	}
 	if lastErr == nil {
@@ -267,6 +321,20 @@ func rewriteModel(body []byte, model string, stream bool) ([]byte, error) {
 		return nil, err
 	}
 	m["model"] = mb
+	sb, err := json.Marshal(stream)
+	if err != nil {
+		return nil, err
+	}
+	m["stream"] = sb
+	return json.Marshal(m)
+}
+
+// rewriteStream 只改写请求体里的 stream 字段。
+func rewriteStream(body []byte, stream bool) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
 	sb, err := json.Marshal(stream)
 	if err != nil {
 		return nil, err

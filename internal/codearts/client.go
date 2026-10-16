@@ -47,6 +47,21 @@ const (
 	AppID         = "CodeAgent3.0"
 )
 
+// Channel 是上游的路由通道。
+//
+// 实测（2026-10）：CodeArts inferhub 用请求头 maas_type 区分两条通道 ——
+// 同一个模型名在不同通道下是否可用、是否计费都不同。
+type Channel string
+
+const (
+	// ChannelBenefit 走每日免费权益额度：请求头带 `maas_type: benefit`。
+	// 额度见 /api/v1/user/tokens/balance 的 daily_token_limit。
+	ChannelBenefit Channel = "benefit"
+	// ChannelCredit 走订阅 / 积分通道：**不带** maas_type 头，按积分计费。
+	// 例如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro 都属于这一类。
+	ChannelCredit Channel = "credit"
+)
+
 // Client 是 CodeArts 上游 HTTP 客户端。
 type Client struct {
 	HTTP *http.Client
@@ -101,7 +116,10 @@ func NewClient() *Client {
 }
 
 // baseHeaders 构造一次请求的公共头（含身份头与 tracing 头）。
-func (c *Client) baseHeaders(model string) map[string]string {
+//
+// channel 决定是否带 `maas_type: benefit`：benefit 走免费权益额度，
+// credit 不带该头从而落到积分通道。
+func (c *Client) baseHeaders(model string, channel Channel) map[string]string {
 	id := c.Identity
 	if id.PluginName == "" {
 		id = DefaultIdentity()
@@ -131,7 +149,12 @@ func (c *Client) baseHeaders(model string) map[string]string {
 	if id.Language != "" {
 		h["X-Language"] = id.Language
 	}
+	if channel == ChannelBenefit {
+		h["maas_type"] = string(ChannelBenefit)
+	}
 	if model != "" {
+		// 上游会校验 model-id 与请求体里的 model 完全一致（不一致报 406），
+		// 因此这里必须与 rewriteModel 写入的值相同。
 		h["model-id"] = model
 		h["model-name"] = model
 	}
@@ -208,7 +231,7 @@ type gatewayEnvelope struct {
 
 // FetchGatewayConfig 拉取 benefit 通道可用模型。
 func (c *Client) FetchGatewayConfig(ctx context.Context, sess *Session) (*GatewayConfig, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, GatewayConfigPath, nil, c.baseHeaders(""))
+	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, GatewayConfigPath, nil, c.baseHeaders("", ChannelCredit))
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +273,7 @@ type TokensBalance struct {
 
 // FetchBalance 查询额度余额。
 func (c *Client) FetchBalance(ctx context.Context, sess *Session) (*TokensBalance, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, BalancePath, nil, c.baseHeaders(""))
+	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, BalancePath, nil, c.baseHeaders("", ChannelCredit))
 	if err != nil {
 		return nil, err
 	}
@@ -277,18 +300,49 @@ func (c *Client) FetchBalance(ctx context.Context, sess *Session) (*TokensBalanc
 }
 
 // BuiltinModel 是订阅 / 企业内置模型。
+//
+// 这些模型走**积分（计费）通道** —— 请求时不带 maas_type 头，按积分计费。
 type BuiltinModel struct {
-	ModelID        string `json:"model_id"`
-	ModelName      string `json:"model_name"`
-	ModelCategory  string `json:"model_category"`
-	Enable         bool   `json:"enable"`
-	DisplayEnabled bool   `json:"display_enabled"`
-	SupportsImages bool   `json:"supports_images"`
+	ModelID        string       `json:"model_id"`
+	ModelName      string       `json:"model_name"`
+	ModelCategory  string       `json:"model_category"`
+	ModelDesc      string       `json:"model_desc"`
+	Enable         bool         `json:"enable"`
+	DisplayEnabled bool         `json:"display_enabled"`
+	SupportsImages bool         `json:"supports_images"`
+	ChannelSource  string       `json:"channel_source"`
+	Credit         []CreditTier `json:"credit"`
 }
+
+// CreditTier 是模型的分段计费档位。
+//
+// 实测取值形如：ratio=0.05、input_price=8、cache_price=2、output_price=28、
+// ratio_display=0.7x —— ratio_display 即用户看到的积分消耗倍率。
+type CreditTier struct {
+	Ratio        string `json:"ratio"`
+	InputPrice   string `json:"input_price"`
+	CachePrice   string `json:"cache_price"`
+	OutputPrice  string `json:"output_price"`
+	RatioDisplay string `json:"ratio_display"`
+	Status       string `json:"status"`
+}
+
+// CreditRatio 返回首档积分倍率的展示值（如 "0.79x"），无计费信息时返回空串。
+func (m BuiltinModel) CreditRatio() string {
+	for _, c := range m.Credit {
+		if c.RatioDisplay != "" {
+			return c.RatioDisplay
+		}
+	}
+	return ""
+}
+
+// IsBillable 报告该模型是否会消耗积分。
+func (m BuiltinModel) IsBillable() bool { return len(m.Credit) > 0 }
 
 // FetchBuiltinModels 拉取内置模型清单（需要 Agent-Type: PromptCenter）。
 func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]BuiltinModel, error) {
-	h := c.baseHeaders("")
+	h := c.baseHeaders("", ChannelCredit)
 	h["Agent-Type"] = "PromptCenter"
 	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, BuiltinModelsPath, nil, h)
 	if err != nil {
@@ -316,9 +370,8 @@ func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]Built
 //
 // 上游返回标准 OpenAI SSE（data: {chat.completion.chunk}），
 // 因此这里只做「拆包 + 错误识别」，不做任何协议转换。
-func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, body []byte, onChunk func([]byte) error) error {
-	h := c.baseHeaders(model)
-	h["maas_type"] = "benefit"
+func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, channel Channel, body []byte, onChunk func([]byte) error) error {
+	h := c.baseHeaders(model, channel)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return err
@@ -355,9 +408,8 @@ func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, bo
 }
 
 // Chat 向 inferhub 发起非流式对话，返回原始响应体。
-func (c *Client) Chat(ctx context.Context, sess *Session, model string, body []byte) ([]byte, error) {
-	h := c.baseHeaders(model)
-	h["maas_type"] = "benefit"
+func (c *Client) Chat(ctx context.Context, sess *Session, model string, channel Channel, body []byte) ([]byte, error) {
+	h := c.baseHeaders(model, channel)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return nil, err
@@ -385,9 +437,15 @@ func (e *UpstreamError) Error() string {
 }
 
 // Probe 用一个最小请求探测凭据是否可用。
-func (c *Client) Probe(ctx context.Context, sess *Session, model string) error {
+//
+// 默认走免费权益通道，避免探活本身消耗积分。
+func (c *Client) Probe(ctx context.Context, sess *Session, model string, channel Channel) error {
 	if model == "" {
 		model = "glm-5.3-flash"
+		channel = ChannelBenefit
+	}
+	if channel == "" {
+		channel = ChannelBenefit
 	}
 	body, err := json.Marshal(map[string]any{
 		"model":      model,
@@ -398,7 +456,7 @@ func (c *Client) Probe(ctx context.Context, sess *Session, model string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := c.Chat(ctx, sess, model, body)
+	raw, err := c.Chat(ctx, sess, model, channel, body)
 	if err != nil {
 		return err
 	}

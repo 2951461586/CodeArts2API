@@ -19,20 +19,30 @@ type Model struct {
 	Desc      string `json:"description"`
 	// Source 标记来源：benefit=免费权益通道，builtin=订阅/企业内置
 	Source string `json:"source"`
+	// Channel 决定上游路由（codearts.ChannelBenefit / ChannelCredit）。
+	Channel codearts.Channel `json:"channel"`
+	// Credit 是积分消耗倍率，仅 credit 通道有值（如 "0.79x"）。
+	Credit string `json:"credit,omitempty"`
+	// StreamOnly 标记上游只支持流式：非流式会返回一个空 body 的 400。
+	// 网关会自动降级为「流式 + 本地聚合」，这里只是避免每次多打一次空枪。
+	StreamOnly bool `json:"stream_only,omitempty"`
 }
+
+// IsCredit 报告该模型是否走积分（计费）通道。
+func (m Model) IsCredit() bool { return m.Channel == codearts.ChannelCredit }
 
 // Fallback 是上游模型接口不可达时使用的兜底清单。
 //
 // 取自 2026-10 实测的 benefit 通道（GET /api/v1/gateway/config）。
 var Fallback = []Model{
 	{ID: "glm-5.3-flash", Name: "GLM-5.3-Flash", Context: 1048576, MaxOutput: 131072,
-		Desc: "智谱新一代轻量模型，响应快，适合日常编码与 Agent 循环", Source: "benefit"},
+		Desc: "智谱新一代轻量模型，响应快，适合日常编码与 Agent 循环", Source: "benefit", Channel: codearts.ChannelBenefit},
 	{ID: "deepseek-v4-flash-0731", Name: "DeepSeek-V4-Flash", Context: 1048576, MaxOutput: 393216,
-		Desc: "DeepSeek 轻量快速版，长上下文", Source: "benefit"},
+		Desc: "DeepSeek 轻量快速版，长上下文", Source: "benefit", Channel: codearts.ChannelBenefit},
 	{ID: "deepseek-v4-pro-0813", Name: "DeepSeek-V4-Pro", Context: 1000000, MaxOutput: 393216,
-		Desc: "DeepSeek 专业版，复杂推理与代码生成", Source: "benefit"},
+		Desc: "DeepSeek 专业版，复杂推理与代码生成", Source: "benefit", Channel: codearts.ChannelBenefit},
 	{ID: "deepseek-v4.1-flash", Name: "DeepSeek-V4.1-Flash", Context: 1000000, MaxOutput: 384000,
-		Desc: "DeepSeek V4.1 轻量版", Source: "benefit"},
+		Desc: "DeepSeek V4.1 轻量版", Source: "benefit", Channel: codearts.ChannelBenefit},
 }
 
 // aliases 是内置别名，指向 CodeArts 上游模型 ID。
@@ -140,6 +150,21 @@ func (r *Registry) List(custom map[string]string) []Model {
 	return out
 }
 
+// MarkStreamOnly 记录某模型只支持流式（上游非流式会返回空 body 的 400）。
+//
+// 实测 glm-5.3 就是这样；网关会自动降级为「流式 + 本地聚合」，
+// 这里记下来只是省掉每次多打一次空枪。
+func (r *Registry) MarkStreamOnly(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.models {
+		if strings.EqualFold(r.models[i].ID, id) {
+			r.models[i].StreamOnly = true
+			return
+		}
+	}
+}
+
 // Updated 返回最近一次从上游刷新模型清单的时间。
 func (r *Registry) Updated() time.Time {
 	r.mu.RLock()
@@ -167,7 +192,7 @@ func (r *Registry) Resolve(name string, custom map[string]string) Model {
 		if m, ok := r.lookup(base, target); ok {
 			return m
 		}
-		return Model{ID: target, Name: target, Source: "alias"}
+		return Model{ID: target, Name: target, Source: "alias", Channel: codearts.ChannelBenefit}
 	}
 	lower := strings.ToLower(n)
 	if target, ok := aliases[lower]; ok {
@@ -204,10 +229,10 @@ func (r *Registry) fallback(list []Model, id string) Model {
 			return m
 		}
 	}
-	return Model{ID: id, Name: id, Source: "benefit"}
+	return Model{ID: id, Name: id, Source: "benefit", Channel: codearts.ChannelBenefit}
 }
 
-// FromGatewayConfig 把上游模型清单转换为 registry.Model。
+// FromGatewayConfig 把上游 benefit 通道清单转换为 registry.Model。
 func FromGatewayConfig(models []codearts.GatewayModel) []Model {
 	out := make([]Model, 0, len(models))
 	for _, m := range models {
@@ -216,25 +241,35 @@ func FromGatewayConfig(models []codearts.GatewayModel) []Model {
 			Name:      m.ModelName,
 			Context:   m.ContextWindow,
 			MaxOutput: m.MaxTokens,
-			Desc:      "CodeArts benefit 通道",
+			Desc:      "CodeArts 免费权益通道（计入每日免费额度）",
 			Source:    "benefit",
+			Channel:   codearts.ChannelBenefit,
 		})
 	}
 	return out
 }
 
 // FromBuiltin 把订阅 / 企业内置模型转换为 registry.Model。
+//
+// 这些模型走的是**积分（计费）通道** —— 请求时不带 maas_type 头。
+// 上游返回的 credit[].ratio_display 就是积分消耗倍率，透传给控制台展示。
 func FromBuiltin(models []codearts.BuiltinModel) []Model {
 	out := make([]Model, 0, len(models))
 	for _, m := range models {
 		if !m.Enable {
 			continue
 		}
+		desc := m.ModelCategory
+		if m.ModelDesc != "" {
+			desc = m.ModelDesc
+		}
 		out = append(out, Model{
-			ID:     m.ModelID,
-			Name:   m.ModelName,
-			Desc:   m.ModelCategory,
-			Source: "builtin",
+			ID:      m.ModelID,
+			Name:    m.ModelName,
+			Desc:    desc,
+			Source:  "builtin",
+			Channel: codearts.ChannelCredit,
+			Credit:  m.CreditRatio(),
 		})
 	}
 	return out

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codearts2api/internal/codearts"
+	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
 )
 
@@ -244,23 +245,24 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ModelAliases   map[string]string `json:"model_aliases"`
-		DefaultModel   *string           `json:"default_model"`
-		ForceModel     *string           `json:"force_model"`
-		RequestTimeout *int              `json:"request_timeout_sec"`
-		MaxRetries     *int              `json:"max_retries"`
-		LogKeep        *int              `json:"log_keep"`
-		CORSOrigin     *string           `json:"cors_origin"`
-		AdminPassword  *string           `json:"admin_password"`
-		AutoRefresh    *bool             `json:"auto_refresh"`
-		WriteBackToIDE *bool             `json:"write_back_to_ide"`
-		LiveTTLSeconds *int              `json:"live_ttl_sec"`
-		UserDataDir    *string           `json:"user_data_dir"`
-		PluginName     *string           `json:"plugin_name"`
-		PluginVersion  *string           `json:"plugin_version"`
-		IDEName        *string           `json:"ide_name"`
-		IDEVersion     *string           `json:"ide_version"`
-		Language       *string           `json:"language"`
+		ModelAliases      map[string]string `json:"model_aliases"`
+		DefaultModel      *string           `json:"default_model"`
+		ForceModel        *string           `json:"force_model"`
+		RequestTimeout    *int              `json:"request_timeout_sec"`
+		MaxRetries        *int              `json:"max_retries"`
+		LogKeep           *int              `json:"log_keep"`
+		CORSOrigin        *string           `json:"cors_origin"`
+		AdminPassword     *string           `json:"admin_password"`
+		AutoRefresh       *bool             `json:"auto_refresh"`
+		AllowCreditModels *bool             `json:"allow_credit_models"`
+		WriteBackToIDE    *bool             `json:"write_back_to_ide"`
+		LiveTTLSeconds    *int              `json:"live_ttl_sec"`
+		UserDataDir       *string           `json:"user_data_dir"`
+		PluginName        *string           `json:"plugin_name"`
+		PluginVersion     *string           `json:"plugin_version"`
+		IDEName           *string           `json:"ide_name"`
+		IDEVersion        *string           `json:"ide_version"`
+		Language          *string           `json:"language"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求体解析失败", "invalid_request_error")
@@ -277,6 +279,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.LogKeep, body.LogKeep)
 		setIf(&st.CORSOrigin, body.CORSOrigin)
 		setIf(&st.AutoRefresh, body.AutoRefresh)
+		setIf(&st.AllowCreditModels, body.AllowCreditModels)
 		setIf(&st.WriteBackToIDE, body.WriteBackToIDE)
 		setIf(&st.LiveTTLSeconds, body.LiveTTLSeconds)
 		setIf(&st.UserDataDir, body.UserDataDir)
@@ -337,7 +340,8 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
 		if err == nil {
-			err = s.Up.Probe(ctx, sess, s.defaultProbeModel())
+			probe := s.defaultProbeModel()
+			err = s.Up.Probe(ctx, sess, probe.ID, probe.Channel)
 		}
 		cancel()
 		ok := err == nil
@@ -357,13 +361,16 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
 }
 
-// defaultProbeModel 返回探活用的模型 ID。
-func (s *Server) defaultProbeModel() string {
+// defaultProbeModel 返回探活用的模型。
+//
+// 探活永远走免费权益通道的模型，避免「点一下探活就扣积分」。
+func (s *Server) defaultProbeModel() registry.Model {
 	st := s.Store.Settings()
-	if st.ForceModel != "" {
-		return st.ForceModel
+	m := s.Reg.Resolve(st.DefaultModel, st.ModelAliases)
+	if m.IsCredit() {
+		m = s.Reg.Resolve("glm-5.3-flash", st.ModelAliases)
 	}
-	return s.Reg.Resolve(st.DefaultModel, st.ModelAliases).ID
+	return m
 }
 
 // setIf 仅在指针非空时赋值。

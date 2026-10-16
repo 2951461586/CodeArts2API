@@ -75,6 +75,11 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		modelName = settings.DefaultModel
 	}
 	model := s.Reg.Resolve(modelName, settings.ModelAliases)
+	if model.IsCredit() && !settings.AllowCreditModels {
+		writeAnthropicErr(w, http.StatusForbidden, "invalid_request_error",
+			"模型 "+model.ID+" 走积分（计费）通道，当前已在控制台关闭。如需使用请开启「允许积分模型」。")
+		return
+	}
 
 	upReq, err := anthropicToOpenAI(&req, model.ID)
 	if err != nil {
@@ -108,7 +113,7 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 		outLen int
 	)
 	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
-		res, err := s.chatOnce(ctx, acct, model.ID, body)
+		res, err := s.chatOnce(ctx, acct, model, body)
 		if err != nil {
 			return err
 		}
@@ -144,7 +149,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 
 	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
 		st := newAnthropicStream(w, flusher, msgID, model.ID, promptLen)
-		err := s.streamOnce(ctx, acct, model.ID, body, func(chunk []byte) error {
+		err := s.streamOnce(ctx, acct, model, body, func(chunk []byte) error {
 			if !started {
 				h := w.Header()
 				h.Set("Content-Type", "text/event-stream; charset=utf-8")

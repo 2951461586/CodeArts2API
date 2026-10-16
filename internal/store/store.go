@@ -36,6 +36,9 @@ type Settings struct {
 
 	// AutoRefresh 允许在凭据过期且 IDE 未续期时自行用 refresh_token 续期。
 	AutoRefresh bool `json:"auto_refresh"`
+	// AllowCreditModels 允许调用走积分（计费）通道的模型，如 GLM-5.3。
+	// 关闭后只放行免费权益通道的模型。
+	AllowCreditModels bool `json:"allow_credit_models"`
 	// WriteBackToIDE 允许把续期结果回写 state.vscdb。
 	WriteBackToIDE bool `json:"write_back_to_ide"`
 	// LiveTTLSeconds 是重读 IDE 会话的缓存时长。
@@ -99,15 +102,16 @@ func DefaultSettings() Settings {
 		MaxRetries:     3,
 		LogKeep:        500,
 		// 默认仅放行本机来源；如需局域网访问，在控制台显式配置。
-		CORSOrigin:     "",
-		AutoRefresh:    true,
-		WriteBackToIDE: true,
-		LiveTTLSeconds: 10,
-		PluginName:     codearts.PluginName,
-		PluginVersion:  codearts.PluginVersion,
-		IDEName:        codearts.IDEName,
-		IDEVersion:     codearts.IDEVersion,
-		Language:       "zh-cn",
+		CORSOrigin:        "",
+		AutoRefresh:       true,
+		AllowCreditModels: true,
+		WriteBackToIDE:    true,
+		LiveTTLSeconds:    10,
+		PluginName:        codearts.PluginName,
+		PluginVersion:     codearts.PluginVersion,
+		IDEName:           codearts.IDEName,
+		IDEVersion:        codearts.IDEVersion,
+		Language:          "zh-cn",
 	}
 }
 

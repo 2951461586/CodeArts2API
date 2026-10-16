@@ -100,6 +100,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				"context":     m.Context,
 				"max_output":  m.MaxOutput,
 				"source":      m.Source,
+				"channel":     m.Channel,
+				"credit":      m.Credit,
+				"billable":    m.IsCredit(),
 				"description": m.Desc,
 			},
 		})
