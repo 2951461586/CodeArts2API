@@ -572,6 +572,7 @@ CodeArts2API/
 │  │  ├─ welfare.go            # 运营活动（每日积分 / 邀请码）
 │  │  ├─ sse.go                # SSE 聚合（流式→非流式兜底）+ 错误分类
 │  │  ├─ manager.go            # 凭据解析与续期编排
+│  │  ├─ util.go               # 脱敏（Mask）/ 随机数 / 时间等小工具
 │  │  └─ debug.go              # state.vscdb 键名转储
 │  ├─ registry/          # 模型清单与别名解析
 │  ├─ protocol/          # Anthropic ↔ OpenAI 纯数据转换（可脱离网络单测）
@@ -580,6 +581,7 @@ CodeArts2API/
 │  │  ├─ chat.go  anthropic.go  models.go
 │  │  ├─ claim.go              # 每日自动签到调度
 │  │  ├─ login.go              # 浏览器登录 API
+│  │  ├─ metrics.go            # /metrics（Prometheus 文本，复用现有统计）
 │  │  ├─ admin.go  server.go  web.go
 │  │  └─ web/                  # 控制台（三个文件，go:embed 内嵌）
 │  │     ├─ index.html         # 结构 + 语义（无内联 style / script）

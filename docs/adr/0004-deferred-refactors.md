@@ -27,15 +27,21 @@
 
 **为什么现在不做**：
 
-- `sqlite.go`（643 行，自研 SQLite 解析 + 定长回写）与 `refresh.go`（DPoP/JWS）
-  **没有单元测试**。在没有测试网的情况下拆包，等于把「重构错误」和
-  「原有 bug」混在一起，出问题无法定位。
+- 拆包的前置条件**部分**已满足（2026-10 更新）：`sqlite.go` 的定长原地回写
+  已有 `TestPatchItemValueRoundTrip`（覆写后重读一致、长度不一致必须拒绝），
+  `refresh.go` 的 DPoP 已有 `TestDPoPProofVerifies`、
+  `TestJWKThumbprintMatchesRefreshTokenBinding`，签名器另有
+  `TestSignRequestStableVector` 金标准向量。
+- 但**剩余缺口仍在**：`sqlite.go` 的读取路径（`scanTree` 的溢出页 / 内部页 / 
+  freelist 边界）与 `refresh.go` 的续期失败分支（DPoP 校验失败、refresh_token 过期）
+  还没有测试网。在没有这层测试的情况下拆包，等于把「重构错误」和「原有 bug」
+  混在一起，出问题无法定位。
 - 拆分会产生新的包间依赖（credential 依赖 upstream 的错误类型等），
   需要先定义接口边界，否则只是把耦合换成 import 环。
 
 **建议路径**（下一步）：
 
-1. 先补 `sqlite.go` 的读取/回写测试与 `refresh.go` 的 DPoP 测试向量；
+1. 补 `sqlite.go` 读取路径（多页 / 溢出页 / 损坏页）与 `refresh.go` 失败分支的测试；
 2. 抽出 `internal/credential`（只依赖标准库 + `store` 的错误类型）；
 3. 再抽 `internal/upstream`（client + signer + sse + errors）；
 4. `benefit` / `welfare` 最后拆，因为它们依赖上游客户端。
@@ -94,3 +100,6 @@
 - 状态文件加 `version` 与迁移
 - CI / Makefile / toolchain 固定
 - `/metrics`（Prometheus 文本，复用现有统计，不新增计数器）
+- `sqlite.go` 定长回写 / DPoP 测试向量（拆分前置条件，见上）
+- `chat.go` 主路径测试：退避序列、临时故障不计账号失败、流式→非流式聚合兜底
+- 控制台静态契约测试：页签链（TAB_IDS ↔ HTML ↔ TAB_META）、样式类对齐、同源约束
