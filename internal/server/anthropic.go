@@ -11,38 +11,17 @@ import (
 
 	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
+	"codearts2api/internal/protocol"
 	"codearts2api/internal/registry"
 )
 
-// Anthropic Messages API 兼容层。
+// Anthropic Messages API 兼容层（HTTP 部分）。
 //
 // 上游（CodeArts inferhub）本身是 OpenAI 兼容协议，因此这里做的是
 // 「Anthropic 请求 → OpenAI 请求」与「OpenAI 响应/SSE → Anthropic 响应/SSE」
 // 的双向映射，覆盖 text / thinking / image / tool_use / tool_result。
-
-type anthropicRequest struct {
-	Model         string             `json:"model"`
-	MaxTokens     int                `json:"max_tokens"`
-	System        json.RawMessage    `json:"system"`
-	Messages      []anthropicMessage `json:"messages"`
-	Stream        bool               `json:"stream"`
-	Temperature   *float64           `json:"temperature"`
-	TopP          *float64           `json:"top_p"`
-	StopSequences []string           `json:"stop_sequences"`
-	Tools         []anthropicTool    `json:"tools"`
-	ToolChoice    json.RawMessage    `json:"tool_choice"`
-}
-
-type anthropicMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
-}
-
-type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-}
+//
+// 纯数据转换在 internal/protocol；本文件只负责 HTTP 传输与 SSE 编码。
 
 // handleAnthropicMessages 是 POST /v1/messages 的入口。
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +36,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", "读取请求体失败: "+err.Error())
 		return
 	}
-	var req anthropicRequest
+	var req protocol.Request
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", "请求体解析失败: "+err.Error())
 		return
@@ -82,7 +61,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	upReq, err := anthropicToOpenAI(&req, model.ID)
+	upReq, err := protocol.ToOpenAI(&req, model.ID)
 	if err != nil {
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -98,7 +77,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
-	promptLen := estimatePromptLen(upBody)
+	promptLen := protocol.EstimatePromptLen(upBody)
 
 	if req.Stream {
 		s.streamAnthropic(w, r, upBody, model, key, timeout, start, promptLen)
@@ -128,10 +107,10 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 
-	out := openAIToAnthropicMessage(raw, model.ID)
-	outLen = len([]rune(out.text)) + len([]rune(out.thinking))
+	out := protocol.FromOpenAI(raw, model.ID)
+	outLen = len([]rune(out.Text)) + len([]rune(out.Thinking))
 	s.record(key, acct, model.ID, false, http.StatusOK, start, promptLen, outLen, nil)
-	writeJSON(w, http.StatusOK, out.payload)
+	writeJSON(w, http.StatusOK, out.Payload)
 }
 
 // streamAnthropic 把上游 OpenAI SSE 转换为 Anthropic SSE 事件流。
@@ -193,329 +172,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, streamErr)
 }
 
-// --- Anthropic → OpenAI ---
-
-// anthropicToOpenAI 把 Anthropic 请求转换为 OpenAI Chat Completions 请求体。
-func anthropicToOpenAI(req *anthropicRequest, model string) (map[string]any, error) {
-	out := map[string]any{
-		"model":  model,
-		"stream": req.Stream,
-	}
-	if req.MaxTokens > 0 {
-		out["max_tokens"] = req.MaxTokens
-	}
-	if req.Temperature != nil {
-		out["temperature"] = *req.Temperature
-	}
-	if req.TopP != nil {
-		out["top_p"] = *req.TopP
-	}
-	if len(req.StopSequences) > 0 {
-		out["stop"] = req.StopSequences
-	}
-
-	msgs := make([]map[string]any, 0, len(req.Messages)+1)
-	if sys := anthropicSystemText(req.System); sys != "" {
-		msgs = append(msgs, map[string]any{"role": "system", "content": sys})
-	}
-	for _, m := range req.Messages {
-		converted, err := anthropicMessageToOpenAI(m)
-		if err != nil {
-			return nil, err
-		}
-		msgs = append(msgs, converted...)
-	}
-	out["messages"] = msgs
-
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			fn := map[string]any{"name": t.Name}
-			if t.Description != "" {
-				fn["description"] = t.Description
-			}
-			if len(t.InputSchema) > 0 {
-				fn["parameters"] = json.RawMessage(t.InputSchema)
-			} else {
-				fn["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
-			}
-			tools = append(tools, map[string]any{"type": "function", "function": fn})
-		}
-		out["tools"] = tools
-		if len(req.ToolChoice) > 0 {
-			out["tool_choice"] = anthropicToolChoice(req.ToolChoice)
-		}
-	}
-	return out, nil
-}
-
-// anthropicToolChoice 把 Anthropic 的 tool_choice 映射为 OpenAI 形态。
-func anthropicToolChoice(raw json.RawMessage) any {
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return "auto"
-	}
-	switch obj["type"] {
-	case "any":
-		return "required"
-	case "tool":
-		if name, ok := obj["name"].(string); ok {
-			return map[string]any{"type": "function", "function": map[string]any{"name": name}}
-		}
-		return "auto"
-	case "none":
-		return "none"
-	default:
-		return "auto"
-	}
-}
-
-// anthropicMessageToOpenAI 把一条 Anthropic 消息展开为一条或多条 OpenAI 消息。
-//
-// tool_use 会变成 assistant.tool_calls，tool_result 会变成独立的 role=tool 消息。
-func anthropicMessageToOpenAI(m anthropicMessage) ([]map[string]any, error) {
-	var text string
-	if err := json.Unmarshal(m.Content, &text); err == nil {
-		return []map[string]any{{"role": m.Role, "content": text}}, nil
-	}
-
-	var blocks []map[string]any
-	if err := json.Unmarshal(m.Content, &blocks); err != nil {
-		return nil, fmt.Errorf("content 字段格式不支持")
-	}
-
-	role := m.Role
-	var (
-		parts     []any
-		toolCalls []any
-		toolMsgs  []map[string]any
-	)
-
-	for _, b := range blocks {
-		switch b["type"] {
-		case "text":
-			if t, ok := b["text"].(string); ok && t != "" {
-				parts = append(parts, map[string]any{"type": "text", "text": t})
-			}
-		case "image":
-			if u := anthropicImageURL(b); u != "" {
-				parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
-			}
-		case "tool_use":
-			args, _ := json.Marshal(b["input"])
-			toolCalls = append(toolCalls, map[string]any{
-				"id":   str(b["id"]),
-				"type": "function",
-				"function": map[string]any{
-					"name":      str(b["name"]),
-					"arguments": string(args),
-				},
-			})
-		case "tool_result":
-			toolMsgs = append(toolMsgs, map[string]any{
-				"role":         "tool",
-				"tool_call_id": str(b["tool_use_id"]),
-				"content":      anthropicToolResultText(b),
-			})
-		case "thinking", "redacted_thinking":
-			// 不回流推理内容：上游不需要，且会浪费上下文
-		}
-	}
-
-	out := make([]map[string]any, 0, 2)
-	msg := map[string]any{"role": role}
-	if len(parts) == 1 {
-		if p, ok := parts[0].(map[string]any); ok && p["type"] == "text" {
-			msg["content"] = p["text"]
-		} else {
-			msg["content"] = parts
-		}
-	} else if len(parts) > 1 {
-		msg["content"] = parts
-	} else {
-		msg["content"] = ""
-	}
-	if len(toolCalls) > 0 {
-		msg["tool_calls"] = toolCalls
-	}
-	if len(parts) > 0 || len(toolCalls) > 0 {
-		out = append(out, msg)
-	}
-	out = append(out, toolMsgs...)
-	return out, nil
-}
-
-// anthropicSystemText 提取 system 字段（字符串或文本块数组）。
-func anthropicSystemText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return strings.TrimSpace(s)
-	}
-	var blocks []map[string]any
-	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
-	}
-	var parts []string
-	for _, b := range blocks {
-		if b["type"] == "text" {
-			if t, ok := b["text"].(string); ok && t != "" {
-				parts = append(parts, t)
-			}
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// anthropicImageURL 把 Anthropic 图片块转成 data: / http(s) 地址。
-func anthropicImageURL(block map[string]any) string {
-	src, ok := block["source"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	switch src["type"] {
-	case "base64":
-		media := str(src["media_type"])
-		data := str(src["data"])
-		if data == "" {
-			return ""
-		}
-		if media == "" {
-			media = "image/png"
-		}
-		return "data:" + media + ";base64," + data
-	case "url":
-		return str(src["url"])
-	}
-	return ""
-}
-
-// anthropicToolResultText 提取工具结果中的文本。
-func anthropicToolResultText(block map[string]any) string {
-	switch c := block["content"].(type) {
-	case string:
-		return c
-	case []any:
-		var parts []string
-		for _, item := range c {
-			if m, ok := item.(map[string]any); ok {
-				if m["type"] == "text" {
-					if t, ok := m["text"].(string); ok {
-						parts = append(parts, t)
-					}
-				} else {
-					if b, err := json.Marshal(m); err == nil {
-						parts = append(parts, string(b))
-					}
-				}
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	if block["content"] != nil {
-		if b, err := json.Marshal(block["content"]); err == nil {
-			return string(b)
-		}
-	}
-	return ""
-}
-
-// --- OpenAI → Anthropic ---
-
-// anthropicReply 是转换后的 Anthropic message 及其文本统计。
-type anthropicReply struct {
-	payload  map[string]any
-	text     string
-	thinking string
-}
-
-// openAIToAnthropicMessage 把一次非流式 OpenAI 响应映射为 Anthropic message。
-func openAIToAnthropicMessage(raw []byte, model string) anthropicReply {
-	var resp struct {
-		Choices []struct {
-			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	_ = json.Unmarshal(raw, &resp)
-
-	content := make([]map[string]any, 0, 3)
-	stopReason := "end_turn"
-	var text, thinking string
-	if len(resp.Choices) > 0 {
-		ch := resp.Choices[0]
-		thinking = ch.Message.ReasoningContent
-		text = ch.Message.Content
-		if thinking != "" {
-			content = append(content, map[string]any{"type": "thinking", "thinking": thinking})
-		}
-		if text != "" {
-			content = append(content, map[string]any{"type": "text", "text": text})
-		}
-		for _, tc := range ch.Message.ToolCalls {
-			var input any = map[string]any{}
-			if tc.Function.Arguments != "" {
-				_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
-			}
-			id := tc.ID
-			if id == "" {
-				id = "toolu_" + codearts.RandomHex(12)
-			}
-			content = append(content, map[string]any{
-				"type": "tool_use", "id": id, "name": tc.Function.Name, "input": input,
-			})
-			stopReason = "tool_use"
-		}
-		if ch.FinishReason == "length" {
-			stopReason = "max_tokens"
-		}
-	}
-	if len(content) == 0 {
-		content = append(content, map[string]any{"type": "text", "text": ""})
-	}
-
-	in := resp.Usage.PromptTokens
-	if in == 0 {
-		in = estimatePromptLen(raw)
-	}
-	out := resp.Usage.CompletionTokens
-	if out == 0 {
-		out = len([]rune(text)) + len([]rune(thinking))
-	}
-
-	return anthropicReply{
-		text:     text,
-		thinking: thinking,
-		payload: map[string]any{
-			"id":            "msg_" + codearts.RandomHex(12),
-			"type":          "message",
-			"role":          "assistant",
-			"model":         model,
-			"content":       content,
-			"stop_reason":   stopReason,
-			"stop_sequence": nil,
-			"usage":         map[string]any{"input_tokens": in, "output_tokens": out},
-		},
-	}
-}
-
-// --- 流式转换器 ---
+// --- OpenAI SSE → Anthropic SSE ---
 
 // anthropicStream 把上游 OpenAI SSE 分片转换为 Anthropic SSE 事件。
 type anthropicStream struct {
@@ -679,10 +336,4 @@ func writeAnthropicErr(w http.ResponseWriter, code int, typ, msg string) {
 		"type":  "error",
 		"error": map[string]any{"type": typ, "message": msg},
 	})
-}
-
-// str 从 map 中取字符串。
-func str(v any) string {
-	s, _ := v.(string)
-	return s
 }

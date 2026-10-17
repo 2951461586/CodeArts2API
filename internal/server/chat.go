@@ -11,6 +11,7 @@ import (
 
 	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
+	"codearts2api/internal/protocol"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
 )
@@ -79,7 +80,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
-	promptLen := estimatePromptLen(body)
+	promptLen := protocol.EstimatePromptLen(body)
 
 	if req.Stream {
 		s.streamChat(w, r, upBody, model, key, timeout, start, promptLen)
@@ -382,11 +383,6 @@ func (s *Server) record(key string, acct *codearts.Account, model string, stream
 		e.Err = err.Error()
 	}
 	s.Store.Record(e, outLen)
-}
-
-// estimatePromptLen 粗略估算输入规模（上游不返回 prompt token 数时使用）。
-func estimatePromptLen(body []byte) int {
-	return len(body) / 4
 }
 
 // completionLen 统计非流式响应里的输出字符数。

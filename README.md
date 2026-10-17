@@ -554,6 +554,8 @@ Anthropic 侧映射为 `thinking` 内容块。
 ```text
 CodeArts2API/
 ├─ main.go
+├─ Makefile              # make check / build / race / docker
+├─ .github/workflows/    # CI：gofmt + vet + test + race + 控制台检查
 ├─ cmd/probe/            # 本机诊断工具
 ├─ internal/
 │  ├─ codearts/          # 上游复刻层
@@ -571,6 +573,7 @@ CodeArts2API/
 │  │  ├─ manager.go            # 凭据解析与续期编排
 │  │  └─ debug.go              # state.vscdb 键名转储
 │  ├─ registry/          # 模型清单与别名解析
+│  ├─ protocol/          # Anthropic ↔ OpenAI 纯数据转换（可脱离网络单测）
 │  ├─ apierr/            # 内部错误 → 对外 HTTP 状态码 / OpenAI·Anthropic type
 │  ├─ server/            # OpenAI / Anthropic 兼容层 + 控制台
 │  │  ├─ chat.go  anthropic.go  models.go
@@ -598,6 +601,10 @@ CodeArts2API/
 ## 七、开发与自检
 
 ```bash
+# 一条命令跑完提交前检查（vet + test + 控制台 JS/CSS）
+make check
+
+# 或逐项跑
 go build ./... && go vet ./... && go test ./...
 
 # 校验控制台 JS（跨行字符串 / node --check）与 CSS（括号配对 / 无外部资源）
