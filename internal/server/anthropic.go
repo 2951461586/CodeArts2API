@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 )
@@ -121,9 +122,9 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 		return nil
 	})
 	if err != nil {
-		status := statusOf(err)
-		s.record(key, acct, model.ID, false, status, start, promptLen, 0, err)
-		writeAnthropicErr(w, status, anthropicErrorTypeOf(err), err.Error())
+		e := apierr.From(err)
+		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, err)
+		writeAnthropicErr(w, e.Status, e.Anthropic, err.Error())
 		return
 	}
 
@@ -174,22 +175,22 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 	streamErr = err
 
 	if !started {
-		status := statusOf(err)
+		e := apierr.From(err)
 		msg := "全部账号均不可用"
 		if err != nil {
 			msg = err.Error()
 		}
-		s.record(key, acct, model.ID, true, status, start, promptLen, outLen, err)
-		writeAnthropicErr(w, status, anthropicErrorTypeOf(err), msg)
+		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, err)
+		writeAnthropicErr(w, e.Status, e.Anthropic, msg)
 		return
 	}
 	if streamErr != nil {
 		writeSSE(w, flusher, "error", map[string]any{
 			"type":  "error",
-			"error": map[string]any{"type": anthropicErrorTypeOf(streamErr), "message": streamErr.Error()},
+			"error": map[string]any{"type": apierr.From(streamErr).Anthropic, "message": streamErr.Error()},
 		})
 	}
-	s.record(key, acct, model.ID, true, statusOf(streamErr), start, promptLen, outLen, streamErr)
+	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, streamErr)
 }
 
 // --- Anthropic → OpenAI ---
@@ -670,31 +671,6 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, event string, payload map[s
 	}
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, raw)
 	f.Flush()
-}
-
-// anthropicErrorType 把 HTTP 状态码映射为 Anthropic 的错误 type。
-func anthropicErrorType(status int) string {
-	switch status {
-	case http.StatusTooManyRequests:
-		return "rate_limit_error"
-	case http.StatusBadRequest, http.StatusNotFound:
-		return "invalid_request_error"
-	case http.StatusServiceUnavailable, http.StatusBadGateway:
-		return "overloaded_error"
-	default:
-		return "api_error"
-	}
-}
-
-// anthropicErrorTypeOf 在状态码映射之上，把「凭据不可用」单独标出来。
-//
-// 502 默认映射为 overloaded_error，会暗示客户端「过一会重试」；
-// 但凭据失效只能重新登录，因此用 authentication_error 更贴切。
-func anthropicErrorTypeOf(err error) string {
-	if codearts.IsCredentialsError(err) {
-		return "authentication_error"
-	}
-	return anthropicErrorType(statusOf(err))
 }
 
 // writeAnthropicErr 按 Anthropic 的错误结构返回。

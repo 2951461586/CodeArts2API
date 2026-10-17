@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
@@ -103,8 +104,8 @@ func TestWithAccountRetryNoAccounts(t *testing.T) {
 		t.Fatal("没有账号时不应调用 fn")
 		return nil
 	})
-	if !errors.Is(err, errNoAccount) {
-		t.Errorf("err = %v，期望 errNoAccount", err)
+	if !errors.Is(err, apierr.NoAccount) {
+		t.Errorf("err = %v，期望 apierr.NoAccount", err)
 	}
 }
 

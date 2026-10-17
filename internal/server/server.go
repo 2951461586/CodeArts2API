@@ -81,6 +81,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/login/callback", s.withAdminAuth(s.handleAdminLoginCallback))
 	mux.HandleFunc("/admin/api/login/cancel", s.withAdminAuth(s.handleAdminLoginCancel))
 
+	// 控制台静态资源（内嵌，同源）
+	mux.HandleFunc("/console.css", serveConsoleCSS)
+	mux.HandleFunc("/console.js", serveConsoleJS)
+
 	mux.HandleFunc("/", s.handleRoot)
 
 	return s.withCORS(mux)

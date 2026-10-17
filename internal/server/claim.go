@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 )
 
@@ -158,7 +159,7 @@ func (s *Server) WelfareSnapshot(ctx context.Context, a *codearts.Account) (*cod
 func (s *Server) handleAdminWelfare(w http.ResponseWriter, r *http.Request) {
 	acct := s.Store.NextAccount()
 	if acct == nil {
-		writeErr(w, http.StatusBadRequest, errNoAccount.Error(), "invalid_request_error")
+		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -221,7 +222,7 @@ func (s *Server) handleAdminInvite(w http.ResponseWriter, r *http.Request) {
 		acct = s.Store.NextAccount()
 	}
 	if acct == nil {
-		writeErr(w, http.StatusBadRequest, errNoAccount.Error(), "invalid_request_error")
+		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
 		return
 	}
 

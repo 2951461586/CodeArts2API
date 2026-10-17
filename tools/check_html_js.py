@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""校验内嵌控制台单页 index.html 里的 JS 是否可解析。
+"""校验内嵌控制台的 JS / CSS 是否可解析。
 
-背景：页面只有一个 <script> 区块，**任何一处语法错误都会让整段脚本不执行** ——
+背景：控制台脚本是**单个文件**，任何一处语法错误都会让整段脚本不执行 ——
 按钮、事件绑定、初始数据加载全部失效，表现就是「能输密码但点什么都没反应」。
-最容易踩的坑是把真实换行打进了字符串字面量里（JS 的 "..." 不能跨行）。
+最容易踩的坑有两个：
 
-做两层检查：
+  1. 把真实换行打进了双引号字符串里（JS 的 "..." 不能跨行）；
+  2. 把 `on("#x", function(){...});` 写成 `on("#x", function(){...};`（括号不配对）。
 
-  1. 轻量（总是执行）—— 扫 <script> 区间，找「双引号数量为奇数」的行，
-     也就是跨行的字符串字面量；
-  2. 彻底（有 node 时）—— 把 <script> 抽出来交给 `node --check`，
-     任何语法错误都能抓到。
+JS 做两层检查：
+  * 轻量（总是执行）—— 找「双引号数量为奇数」的行，即跨行字符串；
+  * 彻底（有 node 时）—— 交给 `node --check`，任何语法错误都能抓到。
+
+CSS 做两项检查：花括号配对，以及不得引用外部资源
+（`url(...)` / `@import`），否则收紧后的 CSP 会静默拦截它们。
 
 用法:
-    python tools/check_html_js.py                      # 默认查内嵌控制台
-    python tools/check_html_js.py <path-to.html>
+    python tools/check_html_js.py                    # 默认检查 app.js + app.css
+    python tools/check_html_js.py path/to/app.js
+    python tools/check_html_js.py path/to/index.html  # 会顺着 <script src> 找到 JS
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +29,8 @@ import tempfile
 
 BS = chr(92)  # backslash
 QUOTE = chr(34)  # double quote
+
+WEB_DIR = os.path.join("internal", "server", "web")
 
 
 def strip_literals_and_comments(s: str) -> str:
@@ -60,18 +67,37 @@ def read(path: str):
         return None
 
 
-def extract_script(text: str):
-    start = text.find("<script>")
-    end = text.rfind("</script>")
-    if start < 0 or end < 0 or end <= start:
-        return None
-    return text[start + len("<script>") : end]
+def resolve_js(target: str):
+    """把目标解析成 (js 路径, js 源码)。支持 .js 与引用外链脚本的 .html。"""
+    if target.endswith(".js"):
+        src = read(target)
+        return (target, src) if src is not None else (target, None)
+
+    text = read(target)
+    if text is None:
+        return target, None
+
+    m = re.search(r'<script[^>]*\bsrc="([^"]+)"', text)
+    if m:
+        # src 是 URL 路径（/console.js），映射到 HTML 同目录下的文件名
+        rel = m.group(1).lstrip("/")
+        js_path = os.path.join(os.path.dirname(target), os.path.basename(rel))
+        return js_path, read(js_path)
+
+    # 兼容仍是内联 <script> 的旧布局
+    m = re.search(r"<script>(.*?)</script>", text, re.S)
+    if m:
+        print(f"{target}: 警告——仍是内联 <script>，建议拆成独立文件以便收紧 CSP")
+        return target, m.group(1)
+
+    print(f"{target}: 没有找到 <script src> 或内联 <script>")
+    return target, None
 
 
-def check_multiline_strings(lines, start, end) -> list:
+def check_multiline_strings(script: str) -> list:
     bad = []
-    for i in range(start + 1, end):
-        if strip_literals_and_comments(lines[i]).count(QUOTE) % 2 == 1:
+    for i, line in enumerate(script.split("\n")):
+        if strip_literals_and_comments(line).count(QUOTE) % 2 == 1:
             bad.append(i + 1)
     return bad
 
@@ -94,42 +120,57 @@ def check_with_node(script: str):
     return proc.returncode == 0, proc.stderr.strip()
 
 
-def main() -> int:
-    target = sys.argv[1] if len(sys.argv) > 1 else "internal/server/web/index.html"
-    text = read(target)
+def check_css(path: str) -> int:
+    """检查 CSS：花括号配对 + 不引用外部资源。"""
+    text = read(path)
     if text is None:
         return 2
+    # 去掉注释再数括号
+    body = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    if body.count("{") != body.count("}"):
+        print(f"{path}: 花括号不配对（{body.count('{')} 开 / {body.count('}')} 闭）")
+        return 1
+    ext = re.findall(r"@import|url\(\s*['\"]?(https?:)?//", body)
+    if ext:
+        print(f"{path}: 引用了外部资源 {ext}，收紧后的 CSP 会拦截它")
+        return 1
+    print(f"{path}: OK（{len(text)} 字节，花括号配对，无外部资源）")
+    return 0
 
-    script = extract_script(text)
+
+def main() -> int:
+    target = sys.argv[1] if len(sys.argv) > 1 else os.path.join(WEB_DIR, "console.js")
+    js_path, script = resolve_js(target)
     if script is None:
-        print(f"{target}: 没有找到 <script> 区块")
         return 1
 
-    lines = text.split("\n")
-    start = next(i for i, line in enumerate(lines) if "<script>" in line)
-    end = next(i for i, line in enumerate(lines) if "</script>" in line and i > start)
-
-    bad = check_multiline_strings(lines, start, end)
+    bad = check_multiline_strings(script)
     if bad:
-        print(f"{target}: 发现 {len(bad)} 处跨行的双引号字符串 → 整段 <script> 会 SyntaxError")
+        print(f"{js_path}: 发现 {len(bad)} 处跨行的双引号字符串 → 整段脚本会 SyntaxError")
         print()
+        lines = script.split("\n")
         for ln in bad:
             print(f"--- line {ln} ---")
-            for k in range(max(start, ln - 3), min(end, ln + 2)):
+            for k in range(max(0, ln - 3), min(len(lines), ln + 2)):
                 print(f"{k+1:5d}| {lines[k]}")
             print()
         return 1
 
     ok, detail = check_with_node(script)
     if ok is None:
-        print(f"{target}: 跨行字符串检查 OK（{start+1}~{end+1} 行）；{detail}")
-        return 0
-    if not ok:
-        print(f"{target}: node --check 报语法错误 → 整个 <script> 不会执行")
+        print(f"{js_path}: 跨行字符串检查 OK；{detail}")
+    elif not ok:
+        print(f"{js_path}: node --check 报语法错误 → 整个脚本不会执行")
         print(detail)
         return 1
+    else:
+        print(f"{js_path}: OK（{len(script)} 字节，node --check 通过）")
 
-    print(f"{target}: OK（<script> {start+1}~{end+1} 行，{len(script)} 字节，node --check 通过）")
+    # 只要目标是默认布局（或 HTML），顺带把 CSS 也查了。
+    if target.endswith(".html") or os.path.basename(target) == "console.js":
+        css = os.path.join(os.path.dirname(js_path), "console.css")
+        if os.path.exists(css):
+            return check_css(css)
     return 0
 
 

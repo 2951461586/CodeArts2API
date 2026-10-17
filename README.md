@@ -470,7 +470,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 ## 四、控制台
 
-<http://127.0.0.1:10087/>，单文件、无外部依赖、可离线使用。
+<http://127.0.0.1:10087/>，三个内嵌文件（HTML + CSS + JS）、无外部依赖、可离线使用。
 
 - **概览**：请求统计、今日免费额度进度条、今日签到 n/m、**活动福利列表与邀请链接**、模型清单（含通道与积分倍率）、一键刷新模型
 - **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **签到** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日签到」状态
@@ -565,16 +565,21 @@ CodeArts2API/
 │  │  ├─ manager.go            # 凭据解析与续期编排
 │  │  └─ debug.go              # state.vscdb 键名转储
 │  ├─ registry/          # 模型清单与别名解析
+│  ├─ apierr/            # 内部错误 → 对外 HTTP 状态码 / OpenAI·Anthropic type
 │  ├─ server/            # OpenAI / Anthropic 兼容层 + 控制台
 │  │  ├─ chat.go  anthropic.go  models.go
 │  │  ├─ claim.go              # 每日自动签到调度
 │  │  ├─ login.go              # 浏览器登录 API
-│  │  └─ admin.go  server.go  web/
-│  └─ store/             # APIKey / 日志 / 设置 / 账号池
+│  │  ├─ admin.go  server.go  web.go
+│  │  └─ web/                  # 控制台（三个文件，go:embed 内嵌）
+│  │     ├─ index.html         # 结构 + 语义（无内联 style / script）
+│  │     ├─ console.css        # 样式与工具类
+│  │     └─ console.js         # 交互逻辑
+│  └─ store/             # APIKey / 日志 / 设置 / 账号池（含 schema 版本与迁移）
 ├─ tools/                # 辅助脚本（Python）
 │  ├─ decrypt_session.py  # 只读解密 state.vscdb，验证凭据能否读到
 │  ├─ probe_api.py        # 直接打上游的签名 PoC
-│  └─ check_html_js.py    # 校验内嵌控制台的 JS 能否解析（含 node --check）
+│  └─ check_html_js.py    # 校验控制台 JS（跨行字符串 / node --check）与 CSS（括号 / 外部资源）
 └─ docs/RECON.md         # 逆向勘察报告
 ```
 
@@ -585,8 +590,8 @@ CodeArts2API/
 ```bash
 go build ./... && go vet ./... && go test ./...
 
-# 校验内嵌控制台单页的 JS 能否解析（跨行字符串 / 括号配对 / node --check）
-python tools/check_html_js.py internal/server/web/index.html
+# 校验控制台 JS（跨行字符串 / node --check）与 CSS（括号配对 / 无外部资源）
+python tools/check_html_js.py
 
 # 本机诊断：凭据 / 模型 / 额度 / 活动福利 / 对话探活
 go run ./cmd/probe
@@ -608,13 +613,15 @@ go test -race ./...
 > `internal/store` 的 `TestConcurrentAccountAccessIsSafe` 就是为 `-race` 写的：
 > 它并发跑「控制台读账号快照 + 请求路径写账号字段」，能直接抓到
 > 「对外暴露内部 `*Account` 指针」这类数据竞争。
-
-> 控制台只有一个 `<script>` 区块，**任何一处语法错误都会让整段脚本不执行** ——
+>
+> 控制台只有一个脚本文件（`web/console.js`），**任何一处语法错误都会让整段脚本不执行** ——
 > 按钮、事件绑定、初始加载全部失效，表现是「能输密码但点什么都没反应」。
-> 最容易踩的坑是把真实换行打进字符串字面量（JS 的 `"..."` 不能跨行）。
-> 除脚本外，`go test ./internal/server/` 里也有对应守卫：
-> `TestConsoleScriptHasNoMultilineString`（跨行字符串）与
-> `TestConsoleScriptBalanced`（括号配对 + `<script>` 唯一）。
+> 最容易踩的两个坑：把真实换行打进字符串字面量（JS 的 `"..."` 不能跨行），
+> 以及把 `on("#x", function(){...});` 写成 `on("#x", function(){...};`。
+> `go test ./internal/server/` 里有对应守卫：`TestConsoleScriptHasNoMultilineString`
+> （跨行字符串）、`TestConsoleScriptBalanced`（括号配对）、
+> `TestConsoleHTMLHasNoInlineCode`（无内联 style/script）与
+> `TestConsoleDOMContract`（脚本引用的元素 id 必须存在于 HTML）。
 
 ---
 
@@ -650,7 +657,13 @@ go test -race ./...
   以 `0600` 创建、原子替换（唯一临时文件 + 串行落盘）；
   请勿提交到版本库（见 `.gitignore`）。注意 Windows 上 `0600` 不映射到 ACL。
 - 控制台对 AK / 域 ID / APIKey 一律脱敏展示，`Authorization` 与 `X-Security-token`
-  从不写进日志。控制台页面全程用 `textContent` 渲染，且响应带 CSP 头。
+  从不写进日志。控制台页面全程用 `textContent` 渲染。
+- 控制台**不含任何内联脚本 / 内联样式**，因此 CSP 可以收紧到
+  `script-src 'self'; style-src 'self'`（无 `'unsafe-inline'`），
+  配合 `default-src 'none'`、`connect-src 'self'`、`frame-ancestors 'none'`：
+  即使将来引入注入点，脚本执行不了、数据也运不出去。
+- 管理密码不再写入 `localStorage`（明文落盘等价于「导出完整登录态」的权限），
+  只在内存与当前标签页的 `sessionStorage` 中保存；历史版本残留的值会在启动时清除。
 - **CORS 默认只放行同源**（控制台自己的页面），不再默认放行任意 localhost 端口。
   需要别的来源时在设置里显式列出，且不接受通配符。
 - 上游身份头里的 `x-ot-session-id` 按凭据推导并**复用**（不再每请求随机），

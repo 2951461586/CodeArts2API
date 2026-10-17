@@ -3,20 +3,17 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
 )
-
-// errNoAccount 表示账号池为空。
-var errNoAccount = errors.New("没有可用账号，请先在控制台「导入本机桌面端」或在 CodeArts Agent 里登录")
 
 // chatRequest 是 OpenAI Chat Completions 的请求体（仅取网关需要处理的字段）。
 //
@@ -107,9 +104,9 @@ func (s *Server) blockingChat(w http.ResponseWriter, r *http.Request, body []byt
 		return nil
 	})
 	if err != nil {
-		status := statusOf(err)
-		s.record(key, acct, model.ID, false, status, start, promptLen, 0, err)
-		writeErr(w, status, err.Error(), errorTypeOf(err))
+		e := apierr.From(err)
+		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, err)
+		writeErr(w, e.Status, err.Error(), e.OpenAI)
 		return
 	}
 
@@ -160,23 +157,24 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 
 	if !started {
 		// 上游连一次都没成功：按普通错误返回，客户端能拿到明确的状态码
-		status := statusOf(err)
+		e := apierr.From(err)
 		msg := "全部账号均不可用"
 		if err != nil {
 			msg = err.Error()
 		}
-		s.record(key, acct, model.ID, true, status, start, promptLen, outLen, err)
-		writeErr(w, status, msg, errorTypeOf(err))
+		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, err)
+		writeErr(w, e.Status, msg, e.OpenAI)
 		return
 	}
 
 	if streamErr != nil {
 		// 已经在流里了，只能以 SSE 错误块收尾（OpenAI 客户端只看 error 对象）
+		e := apierr.From(streamErr)
 		errChunk, _ := json.Marshal(map[string]any{
 			"error": map[string]any{
 				"message": streamErr.Error(),
-				"type":    errorTypeOf(streamErr),
-				"code":    statusOf(streamErr),
+				"type":    e.OpenAI,
+				"code":    e.Status,
 			},
 		})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", errChunk)
@@ -184,7 +182,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	s.record(key, acct, model.ID, true, statusOf(streamErr), start, promptLen, outLen, streamErr)
+	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, streamErr)
 }
 
 // chatOnce 用指定账号发一次非流式请求。
@@ -276,7 +274,7 @@ const (
 func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn func(context.Context, *codearts.Account) error) (*codearts.Account, error) {
 	accts := s.Store.Accounts()
 	if len(accts) == 0 {
-		return nil, errNoAccount
+		return nil, apierr.NoAccount
 	}
 	attempts := s.Store.Settings().MaxRetries
 	if attempts <= 0 {
@@ -384,63 +382,6 @@ func (s *Server) record(key string, acct *codearts.Account, model string, stream
 		e.Err = err.Error()
 	}
 	s.Store.Record(e, outLen)
-}
-
-// statusOf 把错误映射为合适的 HTTP 状态码。
-//
-// 一律回 502 会丢掉语义：客户端无法区分「稍后重试即可」（并发上限 / 限流）
-// 与「请求本身有问题」，也无法对 429 做退避。
-func statusOf(err error) int {
-	if err == nil {
-		return http.StatusOK
-	}
-	if errors.Is(err, errNoAccount) {
-		return http.StatusServiceUnavailable
-	}
-	var ue *codearts.UpstreamError
-	if !errors.As(err, &ue) {
-		// 凭据不可用、网络错误等：都是网关侧的问题
-		return http.StatusBadGateway
-	}
-	switch {
-	case codearts.IsTransientUpstream(err):
-		// 上游 5xx 用 502；并发上限（上游用 400 表达）与 429 用 429，
-		// 让客户端知道「等一会再试」而不是「请求错了」。
-		if ue.Status >= 500 {
-			return http.StatusBadGateway
-		}
-		return http.StatusTooManyRequests
-	case ue.Status == http.StatusNotFound:
-		return http.StatusNotFound
-	case ue.Status == http.StatusOK:
-		// 上游用「HTTP 200 + error_code」表达的业务错误（未知模型、参数非法…），
-		// 属于客户端问题，不应报成网关故障。
-		return http.StatusBadRequest
-	case ue.Status >= 400 && ue.Status < 500:
-		return http.StatusBadRequest
-	default:
-		return http.StatusBadGateway
-	}
-}
-
-// errorTypeOf 返回 OpenAI 风格的错误 type（与 statusOf 配套）。
-func errorTypeOf(err error) string {
-	// 凭据不可用必须与上游故障区分开：重试没有意义，用户得重新登录。
-	if codearts.IsCredentialsError(err) {
-		return "credentials_error"
-	}
-	switch statusOf(err) {
-	case http.StatusTooManyRequests:
-		return "rate_limit_error"
-	case http.StatusBadRequest:
-		return "invalid_request_error"
-	case http.StatusNotFound:
-		return "invalid_request_error"
-	case http.StatusServiceUnavailable:
-		return "server_error"
-	default:
-		return "upstream_error"
-	}
 }
 
 // estimatePromptLen 粗略估算输入规模（上游不返回 prompt token 数时使用）。

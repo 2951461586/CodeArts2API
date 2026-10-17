@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 )
@@ -29,7 +30,7 @@ func newModelCache() *modelCache { return &modelCache{} }
 func (s *Server) RefreshModels(ctx context.Context) error {
 	acct := s.Store.NextAccount()
 	if acct == nil {
-		return errNoAccount
+		return apierr.NoAccount
 	}
 	sess, err := s.Cred.Session(ctx, acct, s.resolveOptions())
 	if err != nil {
@@ -140,7 +141,7 @@ func (s *Server) handleAdminBalance(w http.ResponseWriter, r *http.Request) {
 
 	acct := s.Store.NextAccount()
 	if acct == nil {
-		writeErr(w, http.StatusBadRequest, errNoAccount.Error(), "invalid_request_error")
+		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)

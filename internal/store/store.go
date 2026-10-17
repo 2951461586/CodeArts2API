@@ -92,8 +92,17 @@ type Stats struct {
 	StartedAt      int64 `json:"started_at"`
 }
 
+// StateVersion 是状态文件当前的 schema 版本。
+//
+// 0 表示「加版本号之前的历史文件」。对 State 结构做不兼容改动时 +1，
+// 并在 migrate 里补一段从旧版本升级的逻辑。Open 会拒绝读取版本高于
+// 本程序的文件 —— 否则新版本写的字段会被旧程序静默丢弃。
+const StateVersion = 1
+
 // State 是全部持久化状态。
 type State struct {
+	// Version 是 schema 版本（见 StateVersion）。
+	Version  int                 `json:"version"`
 	Accounts []*codearts.Account `json:"accounts"`
 	Keys     []*APIKey           `json:"keys"`
 	Settings Settings            `json:"settings"`
@@ -151,13 +160,37 @@ func Open(path string) (*Store, error) {
 		if err := json.Unmarshal(raw, &s.st); err != nil {
 			return nil, fmt.Errorf("状态文件解析失败: %w", err)
 		}
+		if err := s.migrate(); err != nil {
+			return nil, err
+		}
 		s.applyDefaults()
 	case errors.Is(err, os.ErrNotExist):
+		s.st.Version = StateVersion
 		s.st.Stats.StartedAt = time.Now().Unix()
 	default:
 		return nil, err
 	}
 	return s, nil
+}
+
+// migrate 把历史状态文件升级到 StateVersion。
+//
+// 目前只有 v0（加版本号之前）→ v1：结构未变，仅补上 version 字段。
+// 以后改结构时在这里追加 case，保证老文件能平滑升级。
+func (s *Store) migrate() error {
+	if s.st.Version > StateVersion {
+		return fmt.Errorf("状态文件版本 %d 高于本程序支持的 %d，请升级 codearts2api",
+			s.st.Version, StateVersion)
+	}
+	for s.st.Version < StateVersion {
+		switch s.st.Version {
+		case 0:
+			s.st.Version = 1
+		default:
+			return fmt.Errorf("状态文件版本 %d 无法迁移", s.st.Version)
+		}
+	}
+	return nil
 }
 
 // applyDefaults 补齐缺失 / 非法字段。
