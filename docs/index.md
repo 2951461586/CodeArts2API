@@ -6,6 +6,7 @@
 | [UPSTREAM.md](UPSTREAM.md) | **当前**上游协议事实：端点、身份头、通道、签名、错误码 | 改上游层的人 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 报错了怎么办（症状 → 原因 → 处置） | 使用者 / 运维 |
 | [../SECURITY.md](../SECURITY.md) | 威胁模型、已实施防护、残余风险、加固清单 | 部署者 / 安全审阅 |
+| [adr/](adr/) | 关键架构决策（为什么这样写、为什么有些事没做） | 维护者 |
 | [RECON.md](RECON.md) | 逆向过程与证据位置（**历史快照**，不代表现状） | 想理解「为什么这么实现」的人 |
 
 ---
@@ -24,10 +25,24 @@
 3. `TROUBLESHOOTING.md` 的「Docker 里打不开控制台」
 
 ### 要改代码
+
 1. `README.md` 的「六、工程结构」
 2. `UPSTREAM.md`（协议事实）
 3. `RECON.md`（为什么这么实现、证据在哪）
 4. `README.md` 的「七、开发与自检」
+5. 动手前看一眼 [adr/](adr/)：那里记了已采纳的决策与**有意推迟**的重构，
+   避免重复讨论或误改（例如「为什么控制台不用 SSE」「为什么不拆 codearts」）。
+
+---
+
+## 架构决策记录（ADR）
+
+| ADR | 结论 |
+| --- | --- |
+| [0001](adr/0001-stdlib-only.md) | 只依赖 Go 标准库（签名 / SQLite / DPAPI 自研） |
+| [0002](adr/0002-console-strict-csp.md) | 控制台拆三文件，CSP 去掉 `unsafe-inline` |
+| [0003](adr/0003-protocol-layer.md) | 协议转换抽到 `internal/protocol`，先测试后搬家 |
+| [0004](adr/0004-deferred-refactors.md) | 有意推迟的重构及原因（codearts 拆分、SSE、slog…） |
 
 ---
 

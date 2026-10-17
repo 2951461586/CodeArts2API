@@ -500,6 +500,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | GET | `/v1/models` | 模型清单（OpenAI 格式，附带 `codearts` 扩展字段） |
 | POST | `/v1/chat/completions` | OpenAI 兼容，支持流式 / 工具调用 / `reasoning_content` |
 | POST | `/v1/messages` | Anthropic Messages API 兼容（含 `thinking` / `tool_use` 双向映射） |
+| GET | `/metrics` | Prometheus 文本格式运行指标（与管理接口同一套鉴权） |
 | GET/POST/DELETE | `/admin/api/*` | 控制台 API（见下表） |
 
 控制台 API：

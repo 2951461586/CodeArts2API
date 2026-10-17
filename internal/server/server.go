@@ -81,6 +81,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/login/callback", s.withAdminAuth(s.handleAdminLoginCallback))
 	mux.HandleFunc("/admin/api/login/cancel", s.withAdminAuth(s.handleAdminLoginCancel))
 
+	// 运行指标（Prometheus 文本格式，与管理接口同一套鉴权）
+	mux.HandleFunc("/metrics", s.withAdminAuth(s.handleMetrics))
+
 	// 控制台静态资源（内嵌，同源）
 	mux.HandleFunc("/console.css", serveConsoleCSS)
 	mux.HandleFunc("/console.js", serveConsoleJS)
