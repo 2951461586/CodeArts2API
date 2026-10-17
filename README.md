@@ -28,13 +28,19 @@
                                     "key":"HuaweiCloudSession"}              ← AK / SK / STS / refresh_token
 ```
 
-> 逆向过程与全部证据见 [`docs/RECON.md`](docs/RECON.md)。
+> 逆向过程与全部证据见 [`docs/RECON.md`](docs/RECON.md)（历史快照）。
+> **当前**上游协议事实见 [`docs/UPSTREAM.md`](docs/UPSTREAM.md)，
+> 报错处置见 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)，
+> 安全模型见 [`SECURITY.md`](SECURITY.md)，文档总览见 [`docs/index.md`](docs/index.md)。
 
 **目录**：[一、快速开始](#一快速开始) ·
 [二、模型与两条通道](#二支持的模型与两条通道) · [三、凭据与续期](#三凭据与续期) ·
 [四、控制台](#四控制台) · [五、HTTP 接口](#五http-接口) ·
 [六、工程结构](#六工程结构) · [七、开发与自检](#七开发与自检) ·
 [八、安全说明](#八安全说明) · [九、免责声明](#九免责声明) · [十、许可证](#十许可证)
+
+**其它文档**：[文档导航](docs/index.md) · [上游协议](docs/UPSTREAM.md) ·
+[故障排查](docs/TROUBLESHOOTING.md) · [安全策略](SECURITY.md) · [逆向勘察](docs/RECON.md)
 
 ---
 
@@ -580,7 +586,11 @@ CodeArts2API/
 │  ├─ decrypt_session.py  # 只读解密 state.vscdb，验证凭据能否读到
 │  ├─ probe_api.py        # 直接打上游的签名 PoC
 │  └─ check_html_js.py    # 校验控制台 JS（跨行字符串 / node --check）与 CSS（括号 / 外部资源）
-└─ docs/RECON.md         # 逆向勘察报告
+└─ docs/
+   ├─ index.md            # 文档导航
+   ├─ UPSTREAM.md         # 当前上游协议事实（活文档）
+   ├─ TROUBLESHOOTING.md  # 故障排查（症状 → 原因 → 处置）
+   └─ RECON.md            # 逆向勘察报告（历史快照）
 ```
 
 ---
@@ -670,6 +680,7 @@ go test -race ./...
   否则会持续撞上游「每账号 3 个并发会话」的上限。
 - 网关默认只监听 `127.0.0.1`。要对外提供服务请显式设置管理密码与
   `CORS 允许来源`，并在反向代理层再做一层鉴权。
+- 完整的威胁模型、残余风险与部署前加固清单见 [`SECURITY.md`](SECURITY.md)。
 - 本项目仅供本机个人复用已授权的账号权益，请遵守华为云服务条款。
 
 ---
