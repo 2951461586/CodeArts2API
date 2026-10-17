@@ -269,6 +269,28 @@ const (
 	transientMaxWait = 3 * time.Second
 )
 
+// transientBackoff 返回第 n 次临时性故障后的退避时长（n 从 1 开始）：
+// base、2*base、…，封顶 max。抽成纯函数是为了让「退避序列」能被单测钉住 ——
+// 之前这里只有一条 `n * base` 的内联表达式，退避写错（比如恒为 0）不会有任何
+// 测试失败，只会在线上表现为「重试等于没退避」。
+func transientBackoff(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	return min(time.Duration(n)*transientBaseWait, transientMaxWait)
+}
+
+// waitRetry 是重试前的等待。测试会替换它以避免真的睡满 1~3 秒；
+// 生产路径始终是「可被 ctx 打断的定时等待」。
+var waitRetry = func(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 // withAccountRetry 选账号并在失败时重试。
 //
 // 返回本次实际使用的账号（可能为 nil），供调用方记录日志归属。
@@ -313,11 +335,8 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 				break
 			}
 			transientWaits++
-			wait := min(time.Duration(transientWaits)*transientBaseWait, transientMaxWait)
-			select {
-			case <-ctx.Done():
+			if err := waitRetry(ctx, transientBackoff(transientWaits)); err != nil {
 				return used, lastErr
-			case <-time.After(wait):
 			}
 			continue
 		}
