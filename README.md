@@ -602,7 +602,7 @@ CodeArts2API/
 ## 七、开发与自检
 
 ```bash
-# 一条命令跑完提交前检查（vet + test + 控制台 JS/CSS）
+# 一条命令跑完提交前检查（vet + 跨平台 vet + test + 控制台 JS/CSS）
 make check
 
 # 或逐项跑
