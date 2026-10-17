@@ -70,6 +70,13 @@
   .bar > i{display:block;height:100%;background:var(--accent)}
   .bar.warn > i{background:var(--warn)}
   .bar.err > i{background:var(--err)}
+  .warn-text{color:var(--warn)}
+  .hidden{display:none}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .toast{cursor:pointer}
+  .toast.err{max-height:40vh;overflow:auto}
+  button.btn[aria-busy="true"]{opacity:.65;cursor:progress}
 </style>
 </head>
 <body>
@@ -77,21 +84,23 @@
   <h1>CodeArts2API 控制台</h1>
   <span id="health" class="badge"><i class="dot"></i><span>检测中…</span></span>
   <span class="sp"></span>
-  <input id="pw" type="password" placeholder="管理密码（如已设置）" autocomplete="current-password" style="width:190px">
-  <button class="btn" id="savePw">记住</button>
+  <input id="pw" type="password" placeholder="管理密码（如已设置）" autocomplete="current-password"
+         aria-label="管理密码" style="width:190px">
+  <button class="btn" id="savePw" title="仅在本标签页记住，关闭标签页即失效">记住</button>
+  <button class="btn" id="forgetPw" title="清除本标签页记住的管理密码">忘记</button>
   <button class="btn primary" id="refresh">刷新</button>
 </header>
 
 <main>
-  <nav>
-    <button data-tab="overview" class="on">概览</button>
-    <button data-tab="accounts">账号</button>
-    <button data-tab="keys">密钥</button>
-    <button data-tab="logs">日志</button>
-    <button data-tab="settings">设置</button>
+  <nav role="tablist" aria-label="控制台分区">
+    <button role="tab" id="nav-overview" data-tab="overview" class="on" aria-selected="true" aria-controls="tab-overview">概览</button>
+    <button role="tab" id="nav-accounts" data-tab="accounts" aria-selected="false" aria-controls="tab-accounts">账号</button>
+    <button role="tab" id="nav-keys" data-tab="keys" aria-selected="false" aria-controls="tab-keys">密钥</button>
+    <button role="tab" id="nav-logs" data-tab="logs" aria-selected="false" aria-controls="tab-logs">日志</button>
+    <button role="tab" id="nav-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings">设置</button>
   </nav>
 
-  <section id="tab-overview" class="on">
+  <section id="tab-overview" class="on" role="tabpanel" aria-labelledby="nav-overview">
     <div class="cards" id="kpis"></div>
     <div class="card">
       <h2>今日额度（benefit 免费权益通道）</h2>
@@ -138,7 +147,7 @@
     </div>
   </section>
 
-  <section id="tab-accounts">
+  <section id="tab-accounts" role="tabpanel" aria-labelledby="nav-accounts">
     <div class="card">
       <h2>账号池</h2>
       <div class="row" style="margin-bottom:12px">
@@ -226,7 +235,7 @@
     </div>
   </section>
 
-  <section id="tab-keys">
+  <section id="tab-keys" role="tabpanel" aria-labelledby="nav-keys">
     <div class="card">
       <h2>API 密钥</h2>
       <div class="row" style="margin-bottom:12px">
@@ -240,7 +249,7 @@
     </div>
   </section>
 
-  <section id="tab-logs">
+  <section id="tab-logs" role="tabpanel" aria-labelledby="nav-logs">
     <div class="card">
       <h2>请求日志</h2>
       <div class="row" style="margin-bottom:12px">
@@ -254,9 +263,10 @@
     </div>
   </section>
 
-  <section id="tab-settings">
+  <section id="tab-settings" role="tabpanel" aria-labelledby="nav-settings">
     <div class="card">
-      <h2>运行设置</h2>
+      <h2>运行设置
+        <span id="settingsDirty" class="badge warn hidden">有未保存的改动</span></h2>
       <div class="grid2">
         <div><label>默认模型（客户端未指定时）</label><input id="sDefaultModel"></div>
         <div><label>强制模型（留空=按客户端请求；填了则一律覆盖）</label><input id="sForceModel"></div>
@@ -327,22 +337,55 @@
   </section>
 </main>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" title="点击关闭"></div>
 
 <script>
 (function(){
   "use strict";
   var $ = function(s){ return document.querySelector(s); };
   var state = { data:null };
+  // 设置表单是否被用户改过：改过之后 refresh() 不得用服务端值覆盖。
+  var settingsDirty = false;
 
   function toast(msg, kind){
     var t = $("#toast");
     t.textContent = msg;
     t.className = "toast show " + (kind||"");
+    // 错误必须能被读到：切到 alert 且不自动消失（点击关闭）。
+    t.setAttribute("role", kind === "err" ? "alert" : "status");
+    t.setAttribute("aria-live", kind === "err" ? "assertive" : "polite");
     clearTimeout(toast._t);
-    toast._t = setTimeout(function(){ t.className = "toast"; }, 4600);
+    if (kind !== "err") {
+      toast._t = setTimeout(function(){ t.className = "toast"; }, 4600);
+    }
   }
   function pw(){ return $("#pw").value.trim(); }
+
+  // 管理密码只放内存 + sessionStorage（当前标签页），绝不再写 localStorage：
+  // 明文密码落在 Local Storage 里，任何同源脚本或本机进程都能直接读走，
+  // 而它等价于「导出完整登录态」的权限。
+  var PW_KEY = "codearts2api_pw";
+  var pwMigrated = false;
+  function loadPw(){
+    var v = "";
+    try {
+      if (localStorage.getItem(PW_KEY) !== null) {
+        localStorage.removeItem(PW_KEY);
+        pwMigrated = true;
+      }
+      v = sessionStorage.getItem(PW_KEY) || "";
+    } catch(e){}
+    return v;
+  }
+  function storePw(v){
+    try {
+      if (v) sessionStorage.setItem(PW_KEY, v);
+      else sessionStorage.removeItem(PW_KEY);
+    } catch(e){}
+  }
+  function clearStoredPw(){
+    try { localStorage.removeItem(PW_KEY); sessionStorage.removeItem(PW_KEY); } catch(e){}
+  }
 
   function api(path, opts){
     opts = opts || {};
@@ -389,8 +432,59 @@
   function btn(label, cls, fn){
     var b = mk("button", "btn " + (cls||""), label);
     b.type = "button";
-    b.onclick = fn;
+    b.onclick = busyable(b, fn);
     return b;
+  }
+
+  // busyable 在异步操作期间禁用按钮，避免双击造成重复提交
+  // （重复签到 / 重复创建密钥 / 重复删除）。
+  function busyable(el, fn){
+    return function(ev){
+      if (el && el.disabled) return;
+      var r = fn.call(this, ev);
+      if (el && r && typeof r.then === "function") {
+        el.disabled = true;
+        el.setAttribute("aria-busy", "true");
+        r.then(function(){}, function(){}).then(function(){
+          el.disabled = false;
+          el.removeAttribute("aria-busy");
+        });
+      }
+      return r;
+    };
+  }
+  // on 给静态按钮绑定处理器并自动加 in-flight 保护。
+  function on(id, fn){
+    var el = $(id);
+    el.onclick = busyable(el, fn);
+    return el;
+  }
+
+  function legacyCopy(text){
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.className = "sr-only";
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch(e){ ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  // copyText 优先用异步剪贴板 API（127.0.0.1 属于安全上下文），
+  // 失败再回退到已废弃的 execCommand。
+  function copyText(text, okMsg){
+    var done = function(ok){
+      toast(ok ? (okMsg || "已复制") : "复制失败，请手动选择后按 Ctrl+C", ok ? "ok" : "err");
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(
+        function(){ done(true); },
+        function(){ done(legacyCopy(text)); });
+    }
+    done(legacyCopy(text));
+    return Promise.resolve();
   }
 
   function fmtTime(s){
@@ -521,7 +615,7 @@
       var expCell = cell("", "mono");
       if (a.expires_at) {
         expCell.textContent = fmtTime(a.expires_at) + "（" + fmtDur(a.expires_in) + "）";
-        if (a.expires_in !== undefined && a.expires_in <= 300) expCell.className = "mono";
+        if (a.expires_in !== undefined && a.expires_in <= 300) expCell.classList.add("warn-text");
       } else {
         expCell.textContent = "—";
       }
@@ -606,6 +700,10 @@
   }
 
   function renderSettings(s){
+    // 用户正在编辑设置时不要用服务端值覆盖 —— 否则在别的页签点一下
+    // 「探活」触发的 refresh() 会静默丢掉未保存的改动。
+    $("#sPw").placeholder = s.admin_password_set ? "已设置，留空则不修改" : "未设置";
+    if (settingsDirty) return;
     $("#sDefaultModel").value = s.default_model || "";
     $("#sForceModel").value = s.force_model || "";
     $("#sTimeout").value = s.request_timeout_sec || "";
@@ -627,7 +725,16 @@
     $("#sIDEName").value = s.ide_name || "";
     $("#sIDEVersion").value = s.ide_version || "";
     $("#sAliases").value = JSON.stringify(s.model_aliases || {}, null, 2);
-    $("#sPw").placeholder = s.admin_password_set ? "已设置，留空则不修改" : "未设置";
+  }
+
+  function markSettingsDirty(){
+    if (settingsDirty) return;
+    settingsDirty = true;
+    $("#settingsDirty").classList.remove("hidden");
+  }
+  function clearSettingsDirty(){
+    settingsDirty = false;
+    $("#settingsDirty").classList.add("hidden");
   }
 
   function refresh(){
@@ -639,7 +746,14 @@
       renderSettings(d.settings || {});
       loadHealth();
     }).catch(function(e){
-      toast("加载失败：" + e.message + (e.status===401 ? "\n请在右上角填写管理密码" : ""), "err");
+      if (e.status === 401) {
+        toast("需要管理密码：请在右上角输入后点「记住」\n" + e.message, "err");
+        $("#pw").focus();
+      } else if (e.status === 403) {
+        toast("管理接口拒绝访问：未设置密码时仅允许本机直连\n" + e.message, "err");
+      } else {
+        toast("加载失败：" + e.message, "err");
+      }
     });
   }
   function refreshLogs(){
@@ -807,62 +921,94 @@
   }
 
   // --- events ---
+  var TAB_IDS = { overview:1, accounts:1, keys:1, logs:1, settings:1 };
+  // activateTab 是唯一的页签切换入口：同步 class / aria-selected / URL hash。
+  // warm=false 时只切显示、不触发额外请求（首次加载用）。
+  function activateTab(name, updateHash, warm){
+    if (!TAB_IDS[name]) return;
+    document.querySelectorAll("nav button").forEach(function(x){
+      var sel = x.dataset.tab === name;
+      x.classList.toggle("on", sel);
+      x.setAttribute("aria-selected", sel ? "true" : "false");
+      x.tabIndex = sel ? 0 : -1;
+    });
+    document.querySelectorAll("section[role=tabpanel]").forEach(function(x){
+      x.classList.toggle("on", x.id === "tab-" + name);
+    });
+    if (updateHash) {
+      try { history.replaceState(null, "", "#" + name); } catch(e){ location.hash = name; }
+    }
+    if (warm === false) return;
+    if (name === "logs") refreshLogs();
+    if (name === "overview") loadWelfare();
+  }
   document.querySelectorAll("nav button").forEach(function(b){
-    b.onclick = function(){
-      document.querySelectorAll("nav button").forEach(function(x){ x.classList.remove("on"); });
-      document.querySelectorAll("section").forEach(function(x){ x.classList.remove("on"); });
-      b.classList.add("on");
-      $("#tab-" + b.dataset.tab).classList.add("on");
-      if (b.dataset.tab === "logs") refreshLogs();
-      if (b.dataset.tab === "overview") loadWelfare();
-    };
+    b.onclick = function(){ activateTab(b.dataset.tab, true); };
+    // WAI-ARIA tabs：左右方向键切换
+    b.addEventListener("keydown", function(e){
+      var keys = Object.keys(TAB_IDS);
+      var i = keys.indexOf(b.dataset.tab);
+      if (e.key === "ArrowRight") { i = (i + 1) % keys.length; }
+      else if (e.key === "ArrowLeft") { i = (i - 1 + keys.length) % keys.length; }
+      else return;
+      e.preventDefault();
+      activateTab(keys[i], true);
+      document.querySelector('nav button[data-tab="' + keys[i] + '"]').focus();
+    });
+  });
+  window.addEventListener("hashchange", function(){
+    activateTab(location.hash.slice(1), false);
   });
 
-  $("#savePw").onclick = function(){
-    try { localStorage.setItem("codearts2api_pw", pw()); } catch(e){}
-    toast("已记住管理密码", "ok");
-    refresh();
-  };
-  $("#refresh").onclick = function(){ refresh(); if ($("#tab-logs").classList.contains("on")) refreshLogs(); };
-  $("#importLocal").onclick = function(){ accountOp("import", {}); };
-  $("#addManual").onclick = function(){
+  on("#savePw", function(){
+    storePw(pw());
+    toast("已在本标签页记住管理密码（关闭标签页即失效）", "ok");
+    return refresh();
+  });
+  on("#forgetPw", function(){
+    clearStoredPw();
+    $("#pw").value = "";
+    toast("已清除本标签页记住的管理密码", "ok");
+  });
+  on("#refresh", function(){
+    var jobs = [refresh()];
+    if ($("#tab-logs").classList.contains("on")) jobs.push(refreshLogs());
+    return Promise.all(jobs);
+  });
+  on("#importLocal", function(){ return accountOp("import", {}); });
+  on("#addManual", function(){
     var ak = $("#manualAK").value.trim(), sk = $("#manualSK").value.trim();
     if (!ak || !sk) { toast("请填写 Access Key 与 Secret Key", "err"); return; }
-    accountOp("manual", {
+    return accountOp("manual", {
       name: $("#manualName").value.trim(), access_key: ak, secret_key: sk,
       security_token: $("#manualSTS").value.trim()
     }).then(function(){
       $("#manualAK").value = ""; $("#manualSK").value = ""; $("#manualSTS").value = "";
     });
-  };
-  $("#addSession").onclick = function(){
+  });
+  on("#addSession", function(){
     var js = $("#sessionJSON").value.trim();
     if (!js) { toast("请粘贴 session JSON", "err"); return; }
-    accountOp("session-json", {name: $("#sessionName").value.trim(), session_json: js}).then(function(){
+    return accountOp("session-json", {name: $("#sessionName").value.trim(), session_json: js}).then(function(){
       $("#sessionJSON").value = "";
     });
-  };
-  $("#checkinAll").onclick = function(){ checkin(null); };
-  $("#claimAll").onclick = function(){ claim(null); };
-  $("#loadWelfare").onclick = loadWelfare;
-  $("#claimWelfareNow").onclick = function(){ claim(null).then(loadWelfare); };
-  $("#genInvite").onclick = function(){
+  });
+  on("#checkinAll", function(){ return checkin(null); });
+  on("#claimAll", function(){ return claim(null); });
+  on("#loadWelfare", loadWelfare);
+  on("#claimWelfareNow", function(){ return claim(null).then(loadWelfare); });
+  on("#genInvite", function(){
     toast("生成中…");
-    api("/admin/api/invite", {method:"POST", body:{}}).then(function(r){
+    return api("/admin/api/invite", {method:"POST", body:{}}).then(function(r){
       $("#inviteURL").value = r.invite_url || "";
       $("#inviteStat").textContent = "已激活 " + (r.activation_count||0) + " / " + (r.max_activations||0) +
         " 次 · 状态 " + (r.status||"") + " · 账号 " + (r.account||"");
       $("#invitePanel").style.display = "block";
       toast("已生成邀请链接", "ok");
     }).catch(function(e){ toast("生成失败：" + e.message, "err"); });
-  };
-  $("#copyInvite").onclick = function(){
-    var el = $("#inviteURL");
-    el.select();
-    try { document.execCommand("copy"); toast("已复制", "ok"); }
-    catch(e){ toast("请手动复制", "err"); }
-  };
-  $("#browserLogin").onclick = function(){
+  });
+  on("#copyInvite", function(){ return copyText($("#inviteURL").value, "已复制邀请链接"); });
+  on("#browserLogin", function(){
     api("/admin/api/login/start", {method:"POST", body:{}}).then(function(r){
       setLoginURL(r.auth_url, r.callback, r.tunnel_hint);
       $("#loginPasted").value = "";
@@ -872,25 +1018,20 @@
       loginSid = r.session_id;
       loginTimer = setInterval(pollLogin, 2000);
     }).catch(function(e){ toast("启动登录失败：" + e.message, "err"); });
-  };
-  $("#loginCopy").onclick = function(){
-    var el = $("#loginURL");
-    if (!el.value) { toast("请先点击「浏览器登录」获取授权地址", "err"); return; }
-    el.select();
-    try { document.execCommand("copy"); toast("已复制授权地址", "ok"); }
-    catch(e){ toast("请手动复制", "err"); }
-  };
-  $("#copyExport").onclick = function(){
-    var el = $("#exportJSON");
-    el.select();
-    try { document.execCommand("copy"); toast("已复制到剪贴板（注意不要外传）", "ok"); }
-    catch(e){ toast("请手动复制", "err"); }
-  };
-  $("#closeExport").onclick = function(){
+  });
+  on("#loginCopy", function(){
+    var v = $("#loginURL").value;
+    if (!v) { toast("请先点击「浏览器登录」获取授权地址", "err"); return; }
+    return copyText(v, "已复制授权地址");
+  });
+  on("#copyExport", function(){
+    return copyText($("#exportJSON").value, "已复制到剪贴板（注意不要外传）");
+  });
+  on("#closeExport", function(){
     $("#exportJSON").value = "";
     $("#exportPanel").style.display = "none";
-  };
-  $("#loginSubmit").onclick = function(){
+  });
+  on("#loginSubmit", function(){
     var u = $("#loginPasted").value.trim();
     if (!u) { toast("请把浏览器地址栏里那条回调 URL 粘进来", "err"); return; }
     if (!loginSid) { toast("登录会话已失效，请重新点击「浏览器登录」", "err"); return; }
@@ -899,52 +1040,50 @@
       $("#loginPasted").value = "";
       pollLogin();
     }).catch(function(e){ toast("提交失败：" + e.message, "err"); });
-  };
-  $("#copyTunnel").onclick = function(){
-    var el = $("#loginTunnel");
-    if (!el.value) { toast("请先点击「浏览器登录」", "err"); return; }
-    el.select();
-    try { document.execCommand("copy"); toast("已复制 SSH 隧道命令", "ok"); }
-    catch(e){ toast("请手动复制", "err"); }
-  };
-  $("#loginCancel").onclick = function(){
+  });
+  on("#copyTunnel", function(){
+    var v = $("#loginTunnel").value;
+    if (!v) { toast("请先点击「浏览器登录」", "err"); return; }
+    return copyText(v, "已复制 SSH 隧道命令");
+  });
+  on("#loginCancel", function(){
     if (loginSid) api("/admin/api/login/cancel", {method:"POST", body:{session_id:loginSid}}).catch(function(){});
     stopLogin();
     $("#loginPanel").style.display = "none";
-  };
-  $("#refreshModels").onclick = function(){
+  });
+  on("#refreshModels", function(){
     toast("正在从上游刷新模型清单…");
     api("/admin/api/models/refresh", {method:"POST"}).then(function(r){
       toast("已刷新，共 " + (r.models||[]).length + " 个模型", "ok");
       return refresh();
     }).catch(function(e){ toast("刷新失败：" + e.message, "err"); });
-  };
-  $("#refreshBalance").onclick = function(){
+  });
+  on("#refreshBalance", function(){
     toast("查询中…");
     api("/admin/api/balance").then(function(r){
       renderBalance(r.balance);
       toast("额度已更新", "ok");
     }).catch(function(e){ toast("查询失败：" + e.message, "err"); });
-  };
-  $("#addKey").onclick = function(){
+  });
+  on("#addKey", function(){
     api("/admin/api/keys", {method:"POST", body:{name:$("#keyName").value.trim()}}).then(function(r){
       toast("已创建密钥（仅显示一次）：\n" + r.key, "ok");
       $("#keyName").value = "";
       return refresh();
     }).catch(function(e){ toast("创建失败：" + e.message, "err"); });
-  };
-  $("#reloadLogs").onclick = refreshLogs;
-  $("#clearLogs").onclick = function(){
+  });
+  on("#reloadLogs", refreshLogs);
+  on("#clearLogs", function(){
     if (!confirm("确定清空全部日志？")) return;
     api("/admin/api/logs", {method:"DELETE"}).then(function(){ toast("已清空","ok"); return refreshLogs(); })
       .catch(function(e){ toast("失败：" + e.message, "err"); });
-  };
-  $("#clearStats").onclick = function(){
+  });
+  on("#clearStats", function(){
     if (!confirm("确定重置统计？")) return;
     api("/admin/api/stats", {method:"DELETE"}).then(function(){ toast("已重置","ok"); return refresh(); })
       .catch(function(e){ toast("失败：" + e.message, "err"); });
-  };
-  $("#saveSettings").onclick = function(){
+  });
+  on("#saveSettings", function(){
     var aliases;
     try { aliases = JSON.parse($("#sAliases").value || "{}"); }
     catch(e){ toast("模型别名不是合法 JSON", "err"); return; }
@@ -973,24 +1112,27 @@
     };
     var np = $("#sPw").value;
     if (np !== "") body.admin_password = np;
-    api("/admin/api/settings", {method:"POST", body:body}).then(function(r){
+    return api("/admin/api/settings", {method:"POST", body:body}).then(function(r){
       $("#sPw").value = "";
       toast("设置已保存", "ok");
+      clearSettingsDirty();
       renderSettings(r.settings || {});
-      if (np !== "") { try { localStorage.setItem("codearts2api_pw", np); $("#pw").value = np; } catch(e){} }
+      if (np !== "") { storePw(np); $("#pw").value = np; }
       return refresh();
     }).catch(function(e){ toast("保存失败：" + e.message, "err"); });
-  };
-  $("#clearPw").onclick = function(){
+  });
+  on("#clearPw", function(){
     if (!confirm("确定清除管理密码？\n清除后管理接口仅允许本机直连访问，反向代理 / 容器场景将无法再打开控制台。")) return;
-    api("/admin/api/settings", {method:"POST", body:{clear_admin_password:true}}).then(function(r){
+    return api("/admin/api/settings", {method:"POST", body:{clear_admin_password:true}}).then(function(r){
       $("#sPw").value = "";
-      try { localStorage.removeItem("codearts2api_pw"); $("#pw").value = ""; } catch(e){}
+      clearStoredPw();
+      $("#pw").value = "";
       toast("管理密码已清除", "ok");
+      clearSettingsDirty();
       renderSettings(r.settings || {});
       return refresh();
     }).catch(function(e){ toast("清除失败：" + e.message, "err"); });
-  };
+  });
   $("#logLimit").onchange = refreshLogs;
 
   // 只读输入框：点击即全选。
@@ -999,9 +1141,21 @@
     el.addEventListener("click", function(){ this.select(); });
   });
 
-  try { var saved = localStorage.getItem("codearts2api_pw"); if (saved) $("#pw").value = saved; } catch(e){}
-  $("#pw").addEventListener("keydown", function(e){ if (e.key === "Enter") { $("#savePw").click(); } });
+  // 设置表单一旦被编辑就标记为脏，refresh() 不再覆盖它。
+  ["input", "change"].forEach(function(evt){
+    $("#tab-settings").addEventListener(evt, markSettingsDirty);
+  });
 
+  var initialPw = loadPw();
+  if (initialPw) $("#pw").value = initialPw;
+  if (pwMigrated) {
+    toast("已清除旧版本存在 localStorage 里的明文管理密码，请重新输入一次。", "err");
+  }
+  $("#pw").addEventListener("keydown", function(e){ if (e.key === "Enter") { $("#savePw").click(); } });
+  $("#toast").addEventListener("click", function(){ this.className = "toast"; });
+
+  var initialTab = location.hash.slice(1);
+  activateTab(TAB_IDS[initialTab] ? initialTab : "overview", false, false);
   refresh();
   setInterval(loadHealth, 20000);
 })();
