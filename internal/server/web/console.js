@@ -81,7 +81,7 @@
   }
   function pill(text, cls){ return mk("span", "badge " + (cls||""), text); }
   function emptyRow(cols, text){
-    var c = cell(text, "muted");
+    var c = cell(text, "empty");
     c.colSpan = cols;
     var r = mk("tr");
     r.appendChild(c);
@@ -162,10 +162,18 @@
     if (n === undefined || n === null) return "—";
     return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
+  // fmtShort 给 KPI 卡片用的紧凑时间：10-16 08:19（完整值放在 title 里）
+  function fmtShort(s){
+    if (!s) return "—";
+    var d = new Date(s * 1000);
+    var p = function(n){ return (n < 10 ? "0" : "") + n; };
+    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
 
   function setHealth(cls, text){
     var el = $("#health");
     el.className = "badge " + cls;
+    el.title = text;
     el.textContent = "";
     el.appendChild(mk("i", "dot"));
     el.appendChild(mk("span", null, text));
@@ -184,30 +192,32 @@
     var s = d.stats || {};
     var accts = d.accounts || [];
     var ready = accts.filter(function(a){ return a.enabled && a.status === "ok"; }).length;
+    var claimed = accts.filter(function(a){ return a.claimed_today; }).length;
+    var creditCount = (d.models || []).filter(function(m){ return m.channel === "credit"; }).length;
     var soonest = null;
     accts.forEach(function(a){
       if (a.expires_at && (soonest === null || a.expires_at < soonest)) soonest = a.expires_at;
     });
     var kpis = [
-      ["总请求", fmtNum(s.total_requests || 0)],
-      ["失败请求", fmtNum(s.failed_requests || 0)],
-      ["输出字符", fmtNum(s.total_chars_out || 0)],
-      ["账号（就绪/总）", ready + " / " + accts.length],
-      ["密钥", (d.keys||[]).length],
-      ["今日签到", accts.filter(function(a){ return a.claimed_today; }).length + " / " + accts.length],
-      ["积分模型", (d.models||[]).filter(function(m){ return m.channel === "credit"; }).length +
-        ((d.settings||{}).allow_credit_models ? " 已启用" : " 已关闭")],
-      ["启动时间", fmtTime(s.started_at)]
+      { k:"总请求", v: fmtNum(s.total_requests || 0) },
+      { k:"失败请求", v: fmtNum(s.failed_requests || 0) },
+      { k:"输出字符", v: fmtNum(s.total_chars_out || 0) },
+      { k:"账号（就绪/总）", v: ready + " / " + accts.length,
+        sub: soonest ? "最早过期 " + fmtShort(soonest) : "", title: soonest ? fmtTime(soonest) : "" },
+      { k:"密钥", v: (d.keys || []).length },
+      { k:"今日签到", v: claimed + " / " + accts.length },
+      { k:"积分模型", v: creditCount,
+        sub: (d.settings || {}).allow_credit_models ? "通道已启用" : "通道已关闭" },
+      { k:"启动时间", v: fmtShort(s.started_at), title: fmtTime(s.started_at) }
     ];
     var box = $("#kpis");
     box.textContent = "";
-    kpis.forEach(function(k){
+    kpis.forEach(function(item){
       var c = mk("div", "kpi");
-      c.appendChild(mk("div", "k", k[0]));
-      c.appendChild(mk("div", "v", k[1]));
-      if (k[0].indexOf("账号") === 0 && soonest) {
-        c.appendChild(mk("div", "sub", "最早过期 " + fmtTime(soonest)));
-      }
+      if (item.title) c.title = item.title;
+      c.appendChild(mk("div", "k", item.k));
+      c.appendChild(mk("div", "v", item.v));
+      if (item.sub) c.appendChild(mk("div", "sub", item.sub));
       box.appendChild(c);
     });
 
@@ -235,20 +245,30 @@
   function renderBalance(b){
     var el = $("#balance");
     el.textContent = "";
-    if (!b) { el.className = "muted"; el.textContent = "尚未查询。"; return; }
     el.className = "";
+    if (!b) { el.className = "muted"; el.textContent = "尚未查询。"; return; }
     var used = b.daily_tokens_used || 0, limit = b.daily_token_limit || 0;
     var pct = limit > 0 ? Math.min(100, Math.round(used * 100 / limit)) : 0;
-    var line = mk("div", null,
-      "通道 " + (b.channel || "—") +
-      " · 今日已用 " + fmtNum(used) + " / " + fmtNum(limit) + " tokens" +
-      " · 剩余 " + fmtNum(b.total_balance) + "（" + pct + "%）");
-    el.appendChild(line);
+    var quota = mk("div", "quota");
+
+    var head = mk("div", "quota-head");
+    head.appendChild(mk("span", "quota-num", pct + "%"));
+    head.appendChild(mk("span", "quota-unit", "今日已用"));
+    head.appendChild(pill("通道 " + (b.channel || "—"), pct >= 90 ? "err" : "ok"));
+    quota.appendChild(head);
+
     var bar = mk("div", "bar " + (pct >= 90 ? "err" : (pct >= 70 ? "warn" : "")));
     var fill = mk("i");
     fill.style.width = pct + "%";
     bar.appendChild(fill);
-    el.appendChild(bar);
+    quota.appendChild(bar);
+
+    var foot = mk("div", "quota-foot");
+    foot.appendChild(mk("span", null, "已用 " + fmtNum(used) + " / " + fmtNum(limit) + " tokens"));
+    foot.appendChild(mk("span", null, "剩余 " + fmtNum(b.total_balance)));
+    quota.appendChild(foot);
+
+    el.appendChild(quota);
   }
 
   function renderAccounts(d){
@@ -270,12 +290,14 @@
       if (a.has_refresh) statusCell.appendChild(document.createTextNode(" "));
       if (a.has_refresh) statusCell.appendChild(pill("可续期", "ok"));
 
-      var expCell = cell("", "mono");
+      var expCell = cell("", "cell-stack");
       if (a.expires_at) {
-        expCell.textContent = fmtTime(a.expires_at) + "（" + fmtDur(a.expires_in) + "）";
-        if (a.expires_in !== undefined && a.expires_in <= 300) expCell.classList.add("warn-text");
+        expCell.appendChild(mk("span", "mono", fmtTime(a.expires_at)));
+        var left = mk("span", "sub", fmtDur(a.expires_in));
+        if (a.expires_in !== undefined && a.expires_in <= 300) left.classList.add("warn-text");
+        expCell.appendChild(left);
       } else {
-        expCell.textContent = "—";
+        expCell.appendChild(mk("span", "mono", "—"));
       }
 
       var claimCell = cell("");
@@ -287,29 +309,23 @@
       if (a.last_claim_msg) claimCell.title = a.last_claim_msg;
       if (a.last_claim_err) claimCell.title = a.last_claim_err;
 
-      var ops = cell("");
-      ops.appendChild(btn("探活", "", function(){ checkin(a.id); }));
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn("签到", "", function(){ claim(a.id); }));
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn("重读", "", function(){ accountOp("reimport", {id:a.id}); }));
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn("导出", "", function(){ exportSession(a.id); }));
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn(a.enabled ? "停用" : "启用", "", function(){ accountOp("toggle", {id:a.id}); }));
+      var ops = cell("", "actions-cell");
+      ops.appendChild(btn("探活", "xs", function(){ checkin(a.id); }));
+      ops.appendChild(btn("签到", "xs", function(){ claim(a.id); }));
+      ops.appendChild(btn("重读", "xs", function(){ accountOp("reimport", {id:a.id}); }));
+      ops.appendChild(btn("导出", "xs", function(){ exportSession(a.id); }));
+      ops.appendChild(btn(a.enabled ? "停用" : "启用", "xs", function(){ accountOp("toggle", {id:a.id}); }));
       if (a.failures > 0) {
-        ops.appendChild(document.createTextNode(" "));
-        ops.appendChild(btn("清错", "", function(){ accountOp("clear-errors", {id:a.id}); }));
+        ops.appendChild(btn("清错", "xs", function(){ accountOp("clear-errors", {id:a.id}); }));
       }
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn("删除", "danger", function(){
+      ops.appendChild(btn("删除", "xs danger", function(){
         if (confirm("确定删除账号 " + a.name + "？")) accountOp("remove", {id:a.id});
       }));
 
       var r = row([
         cell(a.name), cell(a.source, "muted"), cell(a.access_key || "—", "mono"),
         expCell, statusCell, claimCell, cell(a.failures, "mono"),
-        cell(fmtTime(a.last_used), "muted"), ops
+        cell(fmtTime(a.last_used), "muted nowrap"), ops
       ]);
       if (a.last_err) r.title = a.last_err;
       tb.appendChild(r);
@@ -327,10 +343,9 @@
     keys.forEach(function(k){
       var st = cell("");
       st.appendChild(pill(k.enabled ? "启用" : "停用", k.enabled ? "ok" : ""));
-      var ops = cell("");
-      ops.appendChild(btn(k.enabled ? "停用" : "启用", "", function(){ keyOp("toggle", k.key); }));
-      ops.appendChild(document.createTextNode(" "));
-      ops.appendChild(btn("删除", "danger", function(){
+      var ops = cell("", "actions-cell");
+      ops.appendChild(btn(k.enabled ? "停用" : "启用", "xs", function(){ keyOp("toggle", k.key); }));
+      ops.appendChild(btn("删除", "xs danger", function(){
         if (confirm("确定删除该密钥？")) keyOp("key", k.key);
       }));
       tb.appendChild(row([
@@ -346,7 +361,7 @@
     if (!logs || !logs.length) { tb.appendChild(emptyRow(9, "暂无日志")); return; }
     logs.forEach(function(l){
       var st = cell("");
-      st.appendChild(pill(l.status, l.status >= 400 ? "err" : "ok"));
+      st.appendChild(pill(l.status, l.status >= 500 ? "err" : (l.status >= 400 ? "warn" : "ok")));
       var errCell = cell(l.err || "", "muted trunc");
       if (l.err) errCell.title = l.err;
       tb.appendChild(row([
@@ -403,6 +418,9 @@
       renderKeys(d);
       renderSettings(d.settings || {});
       loadHealth();
+      var now = new Date();
+      var p2 = function(n){ return (n < 10 ? "0" : "") + n; };
+      $("#lastSync").textContent = "已更新 " + p2(now.getHours()) + ":" + p2(now.getMinutes()) + ":" + p2(now.getSeconds());
     }).catch(function(e){
       if (e.status === 401) {
         toast("需要管理密码：请在右上角输入后点「记住」\n" + e.message, "err");
@@ -547,7 +565,7 @@
   // 可以挡住管理密码泄露、或将来某个 bug 让 portal_host 变成可控的情况。
   function isTrustedAuthURL(raw){
     var u;
-    try { u = new URL(raw); } catch(e){ return false; }
+    try { u = new URL(raw); } catch { return false; }
     if (u.protocol !== "https:" && u.protocol !== "http:") return false;
     var host = u.hostname.toLowerCase();
     if (u.protocol === "http:") {
@@ -580,6 +598,13 @@
 
   // --- events ---
   var TAB_IDS = { overview:1, accounts:1, keys:1, logs:1, settings:1 };
+  var TAB_META = {
+    overview: { title:"概览", hint:"运行状态与用量", doc:"概览" },
+    accounts: { title:"账号", hint:"账号池、凭据与签到", doc:"账号" },
+    keys:     { title:"密钥", hint:"API 密钥的签发与吊销", doc:"密钥" },
+    logs:     { title:"日志", hint:"请求元信息与错误", doc:"日志" },
+    settings: { title:"设置", hint:"运行参数与访问控制", doc:"设置" }
+  };
   // activateTab 是唯一的页签切换入口：同步 class / aria-selected / URL hash。
   // warm=false 时只切显示、不触发额外请求（首次加载用）。
   function activateTab(name, updateHash, warm){
@@ -593,8 +618,12 @@
     document.querySelectorAll("section[role=tabpanel]").forEach(function(x){
       x.classList.toggle("on", x.id === "tab-" + name);
     });
+    var meta = TAB_META[name];
+    $("#pageTitle").textContent = meta.title;
+    $("#pageHint").textContent = meta.hint;
+    document.title = meta.doc + " · CodeArts2API 控制台";
     if (updateHash) {
-      try { history.replaceState(null, "", "#" + name); } catch(e){ location.hash = name; }
+      try { history.replaceState(null, "", "#" + name); } catch { location.hash = name; }
     }
     if (warm === false) return;
     if (name === "logs") refreshLogs();
@@ -744,7 +773,7 @@
   on("#saveSettings", function(){
     var aliases;
     try { aliases = JSON.parse($("#sAliases").value || "{}"); }
-    catch(e){ toast("模型别名不是合法 JSON", "err"); return; }
+    catch { toast("模型别名不是合法 JSON", "err"); return; }
     var body = {
       model_aliases: aliases,
       default_model: $("#sDefaultModel").value.trim(),
@@ -813,7 +842,8 @@
   $("#toast").addEventListener("click", function(){ this.className = "toast"; });
 
   var initialTab = location.hash.slice(1);
-  activateTab(TAB_IDS[initialTab] ? initialTab : "overview", false, false);
+  initialTab = TAB_IDS[initialTab] ? initialTab : "overview";
+  activateTab(initialTab, false, true);
   refresh();
   setInterval(loadHealth, 20000);
 })();

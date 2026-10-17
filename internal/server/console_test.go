@@ -229,3 +229,212 @@ func TestConsoleDOMContract(t *testing.T) {
 		}
 	}
 }
+
+// --- 页签契约 ---
+
+// TestConsoleTabContract 校验「页签」这条链路的四个环节彼此一致：
+//
+//	TAB_IDS（脚本认可的分区）↔ 侧栏按钮 data-tab ↔ 面板 id="tab-*" ↔ TAB_META（标题/提示）
+//
+// 这条链路的断点都是**整页级**故障，而且静态检查不出来、只有在浏览器里才暴露：
+//   - TAB_IDS 有、TAB_META 没有 → activateTab 里 `meta.title` 抛 TypeError，
+//     页签切换与初始渲染全部中断；
+//   - 按钮 data-tab 有、TAB_IDS 没有 → 点了没反应；
+//   - 面板 id 与 aria-controls 不一致 → 读屏软件报错、面板不显示。
+func TestConsoleTabContract(t *testing.T) {
+	html := string(consoleHTML)
+	js := string(consoleJS)
+
+	idsBlock := regexp.MustCompile(`(?s)var TAB_IDS\s*=\s*\{([^}]*)\}`).FindStringSubmatch(js)
+	if idsBlock == nil {
+		t.Fatal("console.js 里找不到 TAB_IDS 定义")
+	}
+	tabIDs := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(\w+)\s*:`).FindAllStringSubmatch(idsBlock[1], -1) {
+		tabIDs[m[1]] = true
+	}
+	if len(tabIDs) == 0 {
+		t.Fatal("TAB_IDS 为空")
+	}
+
+	// TAB_META 必须覆盖 TAB_IDS 的每一个键（否则 meta.title 会抛错）。
+	for key := range tabIDs {
+		entry := regexp.MustCompile(`(?s)\b` + regexp.QuoteMeta(key) + `\s*:\s*\{([^}]*)\}`).FindStringSubmatch(js)
+		if entry == nil {
+			t.Errorf("TAB_META 缺少 %q —— activateTab 会读 meta.title 并抛 TypeError，整页交互中断", key)
+			continue
+		}
+		for _, field := range []string{"title", "hint", "doc"} {
+			v := regexp.MustCompile(`\b` + field + `:"([^"]*)"`).FindStringSubmatch(entry[1])
+			if v == nil || strings.TrimSpace(v[1]) == "" {
+				t.Errorf("TAB_META[%q].%s 缺失或为空", key, field)
+			}
+		}
+	}
+
+	// 收集 HTML 里的页签按钮与面板。
+	buttons := map[string]string{} // data-tab -> 整个标签
+	selected := 0
+	for _, tag := range regexp.MustCompile(`(?s)<button\b[^>]*>`).FindAllString(html, -1) {
+		if !strings.Contains(tag, `role="tab"`) {
+			continue
+		}
+		key := tagAttr(tag, "data-tab")
+		if key == "" {
+			t.Errorf("页签按钮缺少 data-tab: %s", tag)
+			continue
+		}
+		if _, dup := buttons[key]; dup {
+			t.Errorf("页签 %q 有多个按钮", key)
+		}
+		buttons[key] = tag
+		if tagAttr(tag, "aria-selected") == "true" {
+			selected++
+		}
+	}
+	panels := map[string]string{} // id -> 整个标签
+	for _, tag := range regexp.MustCompile(`(?s)<section\b[^>]*>`).FindAllString(html, -1) {
+		if !strings.Contains(tag, `role="tabpanel"`) {
+			continue
+		}
+		if id := tagAttr(tag, "id"); id != "" {
+			panels[id] = tag
+		}
+	}
+
+	for key := range tabIDs {
+		tag, ok := buttons[key]
+		if !ok {
+			t.Errorf("TAB_IDS 声明了 %q，但 index.html 没有对应的页签按钮", key)
+			continue
+		}
+		panelID := "tab-" + key
+		panel, ok := panels[panelID]
+		if !ok {
+			t.Errorf("TAB_IDS 声明了 %q，但 index.html 没有 id=%q 的面板", key, panelID)
+			continue
+		}
+		if got := tagAttr(tag, "aria-controls"); got != panelID {
+			t.Errorf("页签 %q 的 aria-controls = %q，期望 %q", key, got, panelID)
+		}
+		if got := tagAttr(panel, "aria-labelledby"); got != tagAttr(tag, "id") {
+			t.Errorf("面板 %q 的 aria-labelledby = %q，期望页签按钮 id %q", panelID, got, tagAttr(tag, "id"))
+		}
+	}
+	for key := range buttons {
+		if !tabIDs[key] {
+			t.Errorf("index.html 有页签按钮 data-tab=%q，但 TAB_IDS 没登记 —— 点击后 activateTab 直接 return，表现为「点了没反应」", key)
+		}
+	}
+
+	// 初始状态必须恰好一个页签选中、一个面板可见。
+	if selected != 1 {
+		t.Errorf("初始选中的页签有 %d 个，期望恰好 1 个", selected)
+	}
+	visible := 0
+	for _, panel := range panels {
+		if strings.Contains(panel, `class="on"`) || strings.Contains(panel, `"on `) || strings.Contains(panel, ` on"`) {
+			visible++
+		}
+	}
+	if visible != 1 {
+		t.Errorf("初始可见面板有 %d 个，期望恰好 1 个", visible)
+	}
+}
+
+// tagAttr 取标签里的属性值（属性顺序不敏感）。
+func tagAttr(tag, name string) string {
+	m := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `="([^"]*)"`).FindStringSubmatch(tag)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// --- 样式类契约 ---
+
+// TestConsoleClassContract 校验 HTML 与脚本里用到的 class 都在 console.css 里有定义。
+//
+// 控制台改版时最容易漏的一步是「改了类名、只改了两处中的一处」：
+// 页面结构照旧、样式静默失效（看起来像布局错乱，但控制台不报任何错）。
+// 这里把三处对齐：index.html 的 class 属性、脚本静态构造的 class、
+// 以及 console.css 里的选择器。
+//
+// 若某个 class 只是给脚本当钩子、确实不需要样式，请加进 noStyle 并写明原因。
+func TestConsoleClassContract(t *testing.T) {
+	html := string(consoleHTML)
+	js := string(consoleJS)
+	css := string(consoleCSS)
+
+	// 仅作 JS 钩子、不需要样式的类名白名单。
+	noStyle := map[string]bool{}
+
+	used := map[string]string{} // class -> 首次出现的位置（便于报错定位）
+	for _, m := range regexp.MustCompile(`class="([^"]*)"`).FindAllStringSubmatch(html, -1) {
+		for c := range strings.FieldsSeq(m[1]) {
+			if _, ok := used[c]; !ok {
+				used[c] = "index.html"
+			}
+		}
+	}
+	for _, pat := range []string{
+		`mk\("[a-z]+",\s*"([^"]*)"`,
+		`cell\([^,]*,\s*"([^"]*)"`,
+		`pill\([^,]*,\s*"([^"]*)"`,
+		`btn\([^,]*,\s*"([^"]*)"`,
+	} {
+		for _, m := range regexp.MustCompile(pat).FindAllStringSubmatch(js, -1) {
+			for c := range strings.FieldsSeq(m[1]) {
+				if _, ok := used[c]; !ok {
+					used[c] = "console.js"
+				}
+			}
+		}
+	}
+
+	for class, where := range used {
+		if noStyle[class] {
+			continue
+		}
+		if !regexp.MustCompile(`\.` + regexp.QuoteMeta(class) + `(?:[^\w-]|$)`).MatchString(css) {
+			t.Errorf("%s 使用了 class=%q，但 console.css 里没有对应样式（改版时漏改的一侧）", where, class)
+		}
+	}
+}
+
+// --- 同源约束 ---
+
+// TestConsoleSameOriginOnly 校验控制台不会向任何外部来源发请求。
+//
+// 收紧后的 CSP 是 connect-src 'self' / img-src 'none'，一旦脚本或页面里
+// 出现外部 URL，浏览器会**静默拦截**（不报错、功能就是不好用）。
+// 这里在测试阶段就把它们挡下来。
+func TestConsoleSameOriginOnly(t *testing.T) {
+	html := string(consoleHTML)
+	js := string(consoleJS)
+
+	for _, tag := range regexp.MustCompile(`(?s)<(?:script|link|img|iframe|object|embed)\b[^>]*>`).FindAllString(html, -1) {
+		for _, attr := range []string{"src", "href", "data"} {
+			v := tagAttr(tag, attr)
+			if v == "" {
+				continue
+			}
+			if strings.Contains(v, "://") || strings.HasPrefix(v, "//") {
+				t.Errorf("index.html 引用了外部资源 %s=%q，CSP 会静默拦截: %s", attr, v, tag)
+			}
+		}
+	}
+	for _, bad := range []string{"<base ", "<base>"} {
+		if strings.Contains(html, bad) {
+			t.Error("index.html 含 <base>，配合 CSP base-uri 'none' 会让相对路径失效")
+		}
+	}
+
+	// 脚本的请求目标必须是同源绝对路径。
+	for _, m := range regexp.MustCompile(`\b(?:api|fetch)\(\s*"([^"]*)"`).FindAllStringSubmatch(js, -1) {
+		p := m[1]
+		if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+			t.Errorf("console.js 向非站内路径发起请求: %q（CSP connect-src 'self' 会拦截）", p)
+		}
+	}
+}

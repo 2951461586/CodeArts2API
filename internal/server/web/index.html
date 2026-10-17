@@ -8,262 +8,515 @@
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
-<header>
-  <h1>CodeArts2API 控制台</h1>
-  <span id="health" class="badge"><i class="dot"></i><span>检测中…</span></span>
-  <span class="sp"></span>
-  <input class="w-190" id="pw" type="password" placeholder="管理密码（如已设置）" autocomplete="current-password"
-         aria-label="管理密码">
-  <button class="btn" id="savePw" title="仅在本标签页记住，关闭标签页即失效">记住</button>
-  <button class="btn" id="forgetPw" title="清除本标签页记住的管理密码">忘记</button>
-  <button class="btn primary" id="refresh">刷新</button>
-</header>
+<a class="skip" href="#main">跳到主要内容</a>
 
-<main>
-  <nav role="tablist" aria-label="控制台分区">
-    <button role="tab" id="nav-overview" data-tab="overview" class="on" aria-selected="true" aria-controls="tab-overview">概览</button>
-    <button role="tab" id="nav-accounts" data-tab="accounts" aria-selected="false" aria-controls="tab-accounts">账号</button>
-    <button role="tab" id="nav-keys" data-tab="keys" aria-selected="false" aria-controls="tab-keys">密钥</button>
-    <button role="tab" id="nav-logs" data-tab="logs" aria-selected="false" aria-controls="tab-logs">日志</button>
-    <button role="tab" id="nav-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings">设置</button>
-  </nav>
-
-  <section id="tab-overview" class="on" role="tabpanel" aria-labelledby="nav-overview">
-    <div class="cards" id="kpis"></div>
-    <div class="card">
-      <h2>今日额度（benefit 免费权益通道）</h2>
-      <div id="balance" class="muted">尚未查询。</div>
-      <div class="row mt-12">
-        <button class="btn" id="refreshBalance">查询额度</button>
-        <span class="hint m-0">网关与 CodeArts Agent 共用同一份额度。</span>
-      </div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 20 7.7v8.6L12 20.8 4 16.3V7.7z"/><path d="M4 7.7 12 12.2l8-4.5"/><path d="M12 12.2v8.6"/></svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">CodeArts2API</span>
+        <span class="brand-sub">控制台</span>
+      </span>
     </div>
-    <div class="card">
-      <h2>活动福利（运营活动）</h2>
-      <div class="row mb-12">
-        <button class="btn" id="loadWelfare">刷新活动列表</button>
-        <button class="btn" id="claimWelfareNow">领取可领奖励</button>
-        <button class="btn" id="genInvite">生成我的邀请链接</button>
-        <span class="hint m-0" id="welfareHint"></span>
+
+    <nav class="tabs" role="tablist" aria-label="控制台分区">
+      <button role="tab" id="nav-overview" data-tab="overview" class="on" aria-selected="true" aria-controls="tab-overview">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>
+        <span>概览</span>
+      </button>
+      <button role="tab" id="nav-accounts" data-tab="accounts" aria-selected="false" aria-controls="tab-accounts">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.2 2.5-5.6 5.5-5.6s5.5 2.4 5.5 5.6"/><path d="M16 5.4a3.2 3.2 0 0 1 0 6.2"/><path d="M17.5 14.6c2 .6 3.5 2.5 3.5 4.9"/></svg>
+        <span>账号</span>
+      </button>
+      <button role="tab" id="nav-keys" data-tab="keys" aria-selected="false" aria-controls="tab-keys">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="3.6"/><path d="M11.6 12H21"/><path d="M17.5 12v3"/><path d="M20.5 12v2"/></svg>
+        <span>密钥</span>
+      </button>
+      <button role="tab" id="nav-logs" data-tab="logs" aria-selected="false" aria-controls="tab-logs">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>日志</span>
+      </button>
+      <button role="tab" id="nav-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h8"/><path d="M16 8h4"/><path d="M4 16h4"/><path d="M12 16h8"/><circle cx="14" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></svg>
+        <span>设置</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <span id="health" class="badge"><i class="dot"></i><span>检测中…</span></span>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="page-head">
+        <h1 id="pageTitle">概览</h1>
+        <p class="page-hint" id="pageHint">运行状态与用量</p>
       </div>
-      <table><thead><tr><th>活动</th><th>类型</th><th>奖励</th><th>状态</th><th>可自动领取</th><th>触发方式</th><th>有效期</th></tr></thead>
-      <tbody id="welfare"></tbody></table>
-      <div class="hint">
-        只有<b>靠时间推进</b>的活动（如「每日签到领1000积分」）可以自动领取；
-        <b>邀请</b>与<b>学生认证</b>类必须由真实事件触发，服务端会直接拒绝直接领取。
-      </div>
-      <div class="card hidden mt-12" id="invitePanel">
-        <h2>我的邀请链接</h2>
-        <div class="row">
-          <input class="grow-320" id="inviteURL" readonly data-select-on-click="1">
-          <button class="btn" id="copyInvite">复制</button>
+      <div class="topbar-actions">
+        <span class="sync" id="lastSync" aria-live="polite"></span>
+        <div class="pw-group">
+          <input id="pw" type="password" placeholder="管理密码（如已设置）" autocomplete="current-password"
+                 aria-label="管理密码">
+          <button class="btn ghost xs" id="savePw" title="仅在本标签页记住，关闭标签页即失效">记住</button>
+          <button class="btn ghost xs" id="forgetPw" title="清除本标签页记住的管理密码">忘记</button>
         </div>
-        <div class="hint" id="inviteStat"></div>
+        <button class="btn primary" id="refresh">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/></svg>
+          刷新
+        </button>
       </div>
-    </div>
+    </header>
 
-    <div class="card">
-      <h2>模型</h2>
-      <div class="row mb-12">
-        <button class="btn" id="refreshModels">从上游刷新模型清单</button>
-        <span class="hint m-0" id="modelHint"></span>
-      </div>
-      <table><thead><tr><th>ID</th><th>名称</th><th>通道</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
-      <tbody id="models"></tbody></table>
-      <div class="hint"><b>免费额度</b>通道计入每日免费 token 额度（与 CodeArts Agent 共用）；
-        <b>积分</b>通道按积分计费，会产生真实消耗。</div>
-    </div>
-  </section>
+    <main id="main">
+      <section id="tab-overview" class="on" role="tabpanel" aria-labelledby="nav-overview">
+        <div class="kpis" id="kpis"></div>
 
-  <section id="tab-accounts" role="tabpanel" aria-labelledby="nav-accounts">
-    <div class="card">
-      <h2>账号池</h2>
-      <div class="row mb-12">
-        <button class="btn primary" id="importLocal">导入本机 CodeArts Agent 登录态</button>
-        <button class="btn primary" id="browserLogin">浏览器登录（本机回调）</button>
-        <button class="btn" id="checkinAll">全部探活</button>
-        <button class="btn" id="claimAll">立即签到领福利</button>
-      </div>
-      <div class="card hidden" id="exportPanel">
-        <h2>导出 session JSON</h2>
-        <div class="row">
-          <div class="grow-320">
-            <div id="exportMeta" class="muted"></div>
-            <label>session JSON（可直接粘贴到另一台机器 / 容器的「从 session JSON 导入」）</label>
-            <textarea class="w-full tall" id="exportJSON" readonly data-select-on-click="1"></textarea>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>今日额度</h2>
+              <p class="card-sub">benefit 免费权益通道 · 与 CodeArts Agent 共用同一份额度</p>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="refreshBalance">查询额度</button>
+            </div>
           </div>
-          <div>
-            <button class="btn primary" id="copyExport">复制</button>
-            <button class="btn danger mt-8" id="closeExport">关闭</button>
+          <div id="balance" class="muted">尚未查询。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>活动福利</h2>
+              <p class="card-sub">运营活动与可领取奖励</p>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="loadWelfare">刷新列表</button>
+              <button class="btn" id="claimWelfareNow">领取可领奖励</button>
+              <button class="btn" id="genInvite">生成邀请链接</button>
+              <span class="hint m-0" id="welfareHint"></span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>活动</th><th>类型</th><th>奖励</th><th>状态</th><th>可自动领取</th><th>触发方式</th><th>有效期</th></tr></thead>
+              <tbody id="welfare"></tbody>
+            </table>
+          </div>
+          <p class="hint">
+            只有<b>靠时间推进</b>的活动（如「每日签到领 1000 积分」）可以自动领取；
+            <b>邀请</b>与<b>学生认证</b>类必须由真实事件触发，服务端会直接拒绝直接领取。
+          </p>
+          <div class="card hidden mt-12 subpanel" id="invitePanel">
+            <div class="card-head">
+              <div>
+                <h2>我的邀请链接</h2>
+                <p class="card-sub" id="inviteStat"></p>
+              </div>
+              <div class="card-actions">
+                <button class="btn" id="copyInvite">复制</button>
+              </div>
+            </div>
+            <input class="w-full" id="inviteURL" readonly data-select-on-click="1" aria-label="邀请链接">
           </div>
         </div>
-        <div class="hint warn-text">
-          ⚠️ 该内容等同于账号登录态：含 refresh_token（约 30 天）与 DPoP 私钥。
-          不要外传、不要提交到版本库、不要贴到聊天里。
-        </div>
-      </div>
 
-      <div class="card hidden" id="loginPanel">
-        <h2>浏览器登录</h2>
-        <div class="row">
-          <div class="grow-320">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>模型</h2>
+              <p class="card-sub">当前网关暴露的模型清单与计费通道</p>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="refreshModels">从上游刷新清单</button>
+              <span class="hint m-0" id="modelHint"></span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>名称</th><th>通道</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
+              <tbody id="models"></tbody>
+            </table>
+          </div>
+          <p class="hint">
+            <b>免费额度</b>通道计入每日免费 token 额度（与 CodeArts Agent 共用）；
+            <b>积分</b>通道按积分计费，会产生真实消耗。
+          </p>
+        </div>
+      </section>
+
+      <section id="tab-accounts" role="tabpanel" aria-labelledby="nav-accounts">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>账号池</h2>
+              <p class="card-sub">凭据只存于本机状态文件（0600），页面仅展示脱敏后的 AK</p>
+            </div>
+            <div class="card-actions">
+              <button class="btn primary" id="importLocal">导入本机登录态</button>
+              <button class="btn" id="browserLogin">浏览器登录</button>
+              <button class="btn" id="checkinAll">全部探活</button>
+              <button class="btn" id="claimAll">立即签到</button>
+            </div>
+          </div>
+
+          <div class="card hidden subpanel" id="exportPanel">
+            <div class="card-head">
+              <div>
+                <h2>导出 session JSON</h2>
+                <p class="card-sub" id="exportMeta"></p>
+              </div>
+              <div class="card-actions">
+                <button class="btn primary" id="copyExport">复制</button>
+                <button class="btn danger" id="closeExport">关闭</button>
+              </div>
+            </div>
+            <textarea class="w-full tall" id="exportJSON" readonly data-select-on-click="1"
+                      aria-label="导出的 session JSON"></textarea>
+            <div class="callout">
+              <span class="callout-title">注意</span>
+              <span>该内容等同于账号登录态：含 refresh_token（约 30 天）与 DPoP 私钥。
+                不要外传、不要提交到版本库、不要贴到聊天里。</span>
+            </div>
+          </div>
+
+          <div class="card hidden subpanel" id="loginPanel">
+            <div class="card-head">
+              <div>
+                <h2>浏览器登录</h2>
+                <p class="card-sub">回调地址在本机回环，浏览器必须与网关在同一台机器上</p>
+              </div>
+              <div class="card-actions">
+                <!-- 用真实链接而不是 window.open：弹窗拦截器不会拦，也没有 open-redirect 面 -->
+                <a class="btn primary hidden" id="loginLink" href="#" target="_blank"
+                   rel="noopener noreferrer">打开授权页</a>
+                <button class="btn" id="loginCopy">复制地址</button>
+                <button class="btn danger" id="loginCancel">取消</button>
+              </div>
+            </div>
             <div id="loginStatus" class="muted">等待打开授权页…</div>
-            <div class="hint">回调地址是 <code>127.0.0.1</code>，因此<b>浏览器必须与网关在同一台机器上</b>。</div>
-            <label>授权地址（点链接打开，或复制到浏览器）</label>
-            <input class="w-full" id="loginURL" readonly data-select-on-click="1">
+            <div class="field mt-12">
+              <label for="loginURL">授权地址（点链接打开，或复制到浏览器）</label>
+              <input class="w-full" id="loginURL" readonly data-select-on-click="1">
+            </div>
+
+            <div class="settings-group">
+              <h3>远端部署（服务器上的网关 + 本地浏览器）</h3>
+              <p class="group-hint">
+                回调地址固定是 <code id="loginCallback">—</code> —— 浏览器会把它解析到<b>你自己这台机器</b>，
+                所以远端部署时下面两条路任选一条。
+              </p>
+
+              <div class="field">
+                <label for="loginTunnel">方案 A：SSH 本地端口转发（推荐，之后浏览器会自动跳回）</label>
+                <div class="row">
+                  <input class="grow-320" id="loginTunnel" readonly data-select-on-click="1">
+                  <button class="btn" id="copyTunnel">复制</button>
+                </div>
+                <span class="field-hint">在<b>你本机</b>执行这条命令并保持不断，然后点「打开授权页」即可。</span>
+              </div>
+
+              <div class="field mt-14">
+                <label for="loginPasted">方案 B：无隧道 —— 把浏览器最终停在的地址粘回来</label>
+                <div class="row">
+                  <input class="grow-320" id="loginPasted" placeholder="http://127.0.0.1:xxxxx/oauth/callback?code=...">
+                  <button class="btn primary" id="loginSubmit">提交回调 URL</button>
+                </div>
+                <span class="field-hint">登录后浏览器会停在「无法访问此网站」，<b>但地址栏里的 URL 是完整的</b> —— 整条复制粘到上面。</span>
+              </div>
+            </div>
           </div>
-          <div>
-            <!-- 用真实链接而不是 window.open：弹窗拦截器不会拦，也没有 open-redirect 面 -->
-            <a class="btn primary hidden" id="loginLink" href="#" target="_blank"
-               rel="noopener noreferrer">打开授权页</a>
-            <button class="btn mt-8" id="loginCopy">复制地址</button>
-            <button class="btn danger mt-8" id="loginCancel">取消</button>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>来源</th><th>AK</th><th>凭据有效期</th><th>状态</th><th>今日签到</th><th>失败</th><th>最近使用</th><th>操作</th></tr></thead>
+              <tbody id="accounts"></tbody>
+            </table>
           </div>
+          <p class="hint">AK / 域 ID 已脱敏展示。完整凭据与 refresh_token 只存于本机状态文件（0600）。</p>
         </div>
 
-        <div class="card mt-12 subpanel">
-          <h2>远端部署（服务器上的网关 + 本地浏览器）</h2>
-          <div class="hint mt-0">
-            回调地址固定是 <code id="loginCallback">—</code> —— 浏览器会把它解析到<b>你自己这台机器</b>，
-            所以远端部署时下面两条路任选一条：
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>添加账号</h2>
+              <p class="card-sub">手工录入 STS 临时凭据，或从 session JSON 导入完整登录态</p>
+            </div>
           </div>
 
-          <label>方案 A：SSH 本地端口转发（推荐，之后浏览器会自动跳回）</label>
-          <div class="row">
-            <input class="grow-320" id="loginTunnel" readonly data-select-on-click="1">
-            <button class="btn" id="copyTunnel">复制</button>
+          <div class="settings-group first">
+            <h3>手工录入</h3>
+            <div class="field-grid cols-2">
+              <div class="field">
+                <label for="manualName">账号名称（可选）</label>
+                <input id="manualName" placeholder="留空自动命名">
+              </div>
+              <div class="field">
+                <label for="manualAK">Access Key</label>
+                <input id="manualAK" placeholder="STS 临时 AK">
+              </div>
+              <div class="field">
+                <label for="manualSK">Secret Key</label>
+                <input id="manualSK">
+              </div>
+              <div class="field">
+                <label for="manualSTS">Security Token（可选）</label>
+                <input id="manualSTS">
+              </div>
+            </div>
+            <div class="row mt-12">
+              <button class="btn primary" id="addManual">录入账号</button>
+            </div>
           </div>
-          <div class="hint">在<b>你本机</b>执行这条命令并保持不断，然后点「打开授权页」即可。</div>
 
-          <label>方案 B：无隧道 —— 把浏览器最终停在的地址粘回来</label>
-          <div class="row">
-            <input class="grow-320" id="loginPasted" placeholder="http://127.0.0.1:xxxxx/oauth/callback?code=...">
-            <button class="btn primary" id="loginSubmit">提交回调 URL</button>
-          </div>
-          <div class="hint">
-            登录后浏览器会停在「无法访问此网站」，<b>但地址栏里的 URL 是完整的</b> —— 整条复制粘到上面。
+          <div class="settings-group">
+            <h3>从 session JSON 导入</h3>
+            <div class="field-grid cols-2">
+              <div class="field">
+                <label for="sessionName">账号名称（可选）</label>
+                <input id="sessionName" placeholder="留空自动命名">
+              </div>
+              <div class="field">
+                <label for="sessionJSON">session JSON</label>
+                <input id="sessionJSON" placeholder="HuaweiCloudSession 解密后的内容">
+              </div>
+            </div>
+            <div class="row mt-12">
+              <button class="btn" id="addSession">导入账号</button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="row mb-12">
-        <input class="w-180" id="manualName" placeholder="账号名称（可选）">
-        <input class="w-250" id="manualAK" placeholder="Access Key（STS 临时 AK）">
-        <input class="w-250" id="manualSK" placeholder="Secret Key">
-        <input class="w-250" id="manualSTS" placeholder="Security Token（可选）">
-        <button class="btn" id="addManual">手工录入</button>
-      </div>
-      <div class="row mb-12">
-        <input class="w-180" id="sessionName" placeholder="账号名称（可选）">
-        <input class="w-520" id="sessionJSON" placeholder="粘贴 session JSON（HuaweiCloudSession 解密后的内容）">
-        <button class="btn" id="addSession">从 session JSON 导入</button>
-      </div>
-      <table><thead><tr><th>名称</th><th>来源</th><th>AK</th><th>凭据有效期</th><th>状态</th><th>今日签到</th><th>失败</th><th>最近使用</th><th>操作</th></tr></thead>
-      <tbody id="accounts"></tbody></table>
-      <div class="hint">AK / 域 ID 已脱敏展示。完整凭据与 refresh_token 只存于本机状态文件（0600）。</div>
-    </div>
-  </section>
+      </section>
 
-  <section id="tab-keys" role="tabpanel" aria-labelledby="nav-keys">
-    <div class="card">
-      <h2>API 密钥</h2>
-      <div class="row mb-12">
-        <input class="w-200" id="keyName" placeholder="密钥备注（可选）">
-        <button class="btn primary" id="addKey">创建密钥</button>
-      </div>
-      <table><thead><tr><th>密钥</th><th>备注</th><th>状态</th><th>请求数</th><th>创建时间</th><th>最近使用</th><th>操作</th></tr></thead>
-      <tbody id="keys"></tbody></table>
-      <div class="hint">密钥已脱敏。完整密钥只在创建时返回一次，请立即保存。<br>
-        未签发任何密钥时，<code>/v1/*</code> 仅允许<b>本机直连</b>（可在「设置 → 访问控制」里放开）。</div>
-    </div>
-  </section>
+      <section id="tab-keys" role="tabpanel" aria-labelledby="nav-keys">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>API 密钥</h2>
+              <p class="card-sub">完整密钥只在创建时返回一次，之后仅显示脱敏值</p>
+            </div>
+            <div class="card-actions">
+              <input class="w-200" id="keyName" placeholder="密钥备注（可选）" aria-label="密钥备注">
+              <button class="btn primary" id="addKey">创建密钥</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>密钥</th><th>备注</th><th>状态</th><th>请求数</th><th>创建时间</th><th>最近使用</th><th>操作</th></tr></thead>
+              <tbody id="keys"></tbody>
+            </table>
+          </div>
+          <p class="hint">
+            密钥已脱敏。完整密钥只在创建时返回一次，请立即保存。<br>
+            未签发任何密钥时，<code>/v1/*</code> 仅允许<b>本机直连</b>（可在「设置 → 访问控制」里放开）。
+          </p>
+        </div>
+      </section>
 
-  <section id="tab-logs" role="tabpanel" aria-labelledby="nav-logs">
-    <div class="card">
-      <h2>请求日志</h2>
-      <div class="row mb-12">
-        <select id="logLimit"><option value="50">最近 50</option><option value="200">最近 200</option><option value="0">全部</option></select>
-        <button class="btn" id="reloadLogs">刷新</button>
-        <button class="btn danger" id="clearLogs">清空</button>
-      </div>
-      <table><thead><tr><th>时间</th><th>模型</th><th>流式</th><th>状态</th><th>耗时</th><th>入/出</th><th>账号</th><th>密钥</th><th>错误</th></tr></thead>
-      <tbody id="logs"></tbody></table>
-      <div class="hint">只记录元信息（模型、耗时、长度），不落对话内容。</div>
-    </div>
-  </section>
+      <section id="tab-logs" role="tabpanel" aria-labelledby="nav-logs">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>请求日志</h2>
+              <p class="card-sub">只记录元信息（模型、耗时、长度），不落对话内容</p>
+            </div>
+            <div class="card-actions">
+              <select id="logLimit" class="w-auto" aria-label="日志条数">
+                <option value="50">最近 50</option>
+                <option value="200">最近 200</option>
+                <option value="0">全部</option>
+              </select>
+              <button class="btn" id="reloadLogs">刷新</button>
+              <button class="btn danger" id="clearLogs">清空</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>模型</th><th>流式</th><th>状态</th><th>耗时</th><th>入/出</th><th>账号</th><th>密钥</th><th>错误</th></tr></thead>
+              <tbody id="logs"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
-  <section id="tab-settings" role="tabpanel" aria-labelledby="nav-settings">
-    <div class="card">
-      <h2>运行设置
-        <span id="settingsDirty" class="badge warn hidden">有未保存的改动</span></h2>
-      <div class="grid2">
-        <div><label>默认模型（客户端未指定时）</label><input id="sDefaultModel"></div>
-        <div><label>强制模型（留空=按客户端请求；填了则一律覆盖）</label><input id="sForceModel"></div>
-        <div><label>请求超时（秒）</label><input id="sTimeout" type="number" min="1"></div>
-        <div><label>最大重试次数</label><input id="sRetries" type="number" min="1"></div>
-        <div><label>日志保留条数</label><input id="sLogKeep" type="number" min="1"></div>
-        <div><label>IDE 会话重读间隔（秒）</label><input id="sLiveTTL" type="number" min="1"></div>
-        <div><label>CORS 允许来源（逗号分隔，留空=仅同源）</label><input id="sCors" placeholder="http://192.168.1.10:8080"></div>
-        <div><label>CodeArts Agent User Data 目录（留空自动探测）</label><input id="sUserData" placeholder="%APPDATA%\codearts-agent"></div>
-        <div><label>浏览器登录回调端口（0=随机；远端部署建议固定，如 64361）</label><input id="sLoginPort" type="number" min="0" max="65535" placeholder="0"></div>
-      </div>
+      <section id="tab-settings" role="tabpanel" aria-labelledby="nav-settings">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>运行设置</h2>
+              <p class="card-sub">改动点「保存设置」后生效；保存前刷新页面不会覆盖未保存的编辑</p>
+            </div>
+            <span id="settingsDirty" class="badge warn hidden">有未保存的改动</span>
+          </div>
 
-      <label>计费与通道</label>
-      <div class="row">
-        <label class="m-0"><input class="w-auto" type="checkbox" id="sAllowCredit"> 允许调用积分（计费）通道的模型，如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro</label>
-      </div>
-      <div class="hint">关闭后只放行免费权益通道的模型。积分模型会在账号上产生真实消耗。</div>
+          <div class="settings-group first">
+            <h3>模型与请求</h3>
+            <div class="field-grid">
+              <div class="field">
+                <label for="sDefaultModel">默认模型</label>
+                <input id="sDefaultModel" placeholder="客户端未指定时使用">
+              </div>
+              <div class="field">
+                <label for="sForceModel">强制模型</label>
+                <input id="sForceModel" placeholder="留空=按客户端请求">
+                <span class="field-hint">填了则一律覆盖客户端请求。</span>
+              </div>
+              <div class="field">
+                <label for="sTimeout">请求超时（秒）</label>
+                <input id="sTimeout" type="number" min="1">
+              </div>
+              <div class="field">
+                <label for="sRetries">最大重试次数</label>
+                <input id="sRetries" type="number" min="1">
+              </div>
+            </div>
+          </div>
 
-      <label>访问控制</label>
-      <div class="row">
-        <label class="m-0"><input class="w-auto" type="checkbox" id="sAllowAnonymous"> 未签发密钥时允许匿名调用 <code>/v1/*</code></label>
-      </div>
-      <div class="hint">默认<b>只允许本机直连</b>。若网关监听 <code>0.0.0.0</code>（Docker 默认）或被反向代理，
-        勾选它等于把账号额度开放给任何能访问该端口的人 —— 更好的做法是在「密钥」页签发一个 API 密钥。</div>
+          <div class="settings-group">
+            <h3>存储与刷新</h3>
+            <div class="field-grid">
+              <div class="field">
+                <label for="sLogKeep">日志保留条数</label>
+                <input id="sLogKeep" type="number" min="1">
+              </div>
+              <div class="field">
+                <label for="sLiveTTL">IDE 会话重读间隔（秒）</label>
+                <input id="sLiveTTL" type="number" min="1">
+              </div>
+              <div class="field">
+                <label for="sUserData">CodeArts Agent User Data 目录</label>
+                <input id="sUserData" placeholder="%APPDATA%\codearts-agent">
+                <span class="field-hint">留空自动探测。</span>
+              </div>
+              <div class="field">
+                <label for="sLoginPort">浏览器登录回调端口</label>
+                <input id="sLoginPort" type="number" min="0" max="65535" placeholder="0">
+                <span class="field-hint">0=随机；远端部署建议固定，如 64361。</span>
+              </div>
+            </div>
+          </div>
 
-      <label>每日免费福利 Token 签到</label>
-      <div class="row">
-        <label class="m-0"><input class="w-auto" type="checkbox" id="sAutoClaim"> 每天自动领取免费福利 Token</label>
-        <span class="hint m-0">每日签到时刻</span>
-        <input class="w-70" id="sClaimHour" type="number" min="0" max="23"> :
-        <input class="w-70" id="sClaimMinute" type="number" min="0" max="59">
-      </div>
-      <div class="hint">福利 Token 当日 24:00 清零，所以默认 00:05 领。领取接口是幂等的，重复领不会报错。<br>
-        IDE 运行时它自己也会领；这里的自动签到是「IDE 没开 / 跨天 / 多账号」时的兜底。</div>
+          <div class="settings-group">
+            <h3>网络</h3>
+            <div class="field-grid">
+              <div class="field">
+                <label for="sCors">CORS 允许来源</label>
+                <input id="sCors" placeholder="http://192.168.1.10:8080">
+                <span class="field-hint">逗号分隔；留空=仅同源。</span>
+              </div>
+            </div>
+          </div>
 
-      <label>凭据续期</label>
-      <div class="row">
-        <label class="m-0"><input class="w-auto" type="checkbox" id="sAutoRefresh"> 过期时自行用 refresh_token 续期</label>
-        <label class="m-0"><input class="w-auto" type="checkbox" id="sWriteBack"> 续期后回写 state.vscdb（让 IDE 复用）</label>
-      </div>
-      <div class="hint">IDE 运行时它会自己续期，网关会跟随读取；只有 IDE 关闭且凭据过期时才会用到这里的续期能力。<br>
-        回写仅在长度完全一致时做原地字节覆写，并在写入前备份 <code>state.vscdb.codearts2api.bak</code>。</div>
+          <div class="settings-group">
+            <h3>计费与通道</h3>
+            <label class="check" for="sAllowCredit">
+              <input type="checkbox" id="sAllowCredit">
+              <span>允许调用积分（计费）通道的模型
+                <span class="check-hint">如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro。关闭后只放行免费权益通道；积分模型会在账号上产生真实消耗。</span>
+              </span>
+            </label>
+          </div>
 
-      <label>上游身份头（留空使用与 CodeArts Agent 26.9.902 对齐的缺省值）</label>
-      <div class="grid2">
-        <div><label>plugin-name</label><input id="sPluginName"></div>
-        <div><label>plugin-version</label><input id="sPluginVersion"></div>
-        <div><label>ide-name</label><input id="sIDEName"></div>
-        <div><label>ide-version</label><input id="sIDEVersion"></div>
-      </div>
+          <div class="settings-group">
+            <h3>访问控制</h3>
+            <label class="check" for="sAllowAnonymous">
+              <input type="checkbox" id="sAllowAnonymous">
+              <span>未签发密钥时允许匿名调用 <code>/v1/*</code>
+                <span class="check-hint">默认只允许本机直连。若网关监听 0.0.0.0（Docker 默认）或被反向代理，勾选它等于把账号额度开放给任何能访问该端口的人 —— 更好的做法是在「密钥」页签发一个 API 密钥。</span>
+              </span>
+            </label>
+          </div>
 
-      <label>模型别名（JSON，如 <code>{"gpt-4o":"glm-5.3-flash"}</code>）</label>
-      <textarea id="sAliases" spellcheck="false"></textarea>
+          <div class="settings-group">
+            <h3>每日免费福利 Token 签到</h3>
+            <label class="check" for="sAutoClaim">
+              <input type="checkbox" id="sAutoClaim">
+              <span>每天自动领取免费福利 Token</span>
+            </label>
+            <div class="row mt-12">
+              <span class="field-label">每日签到时刻</span>
+              <input class="w-hour" id="sClaimHour" type="number" min="0" max="23" aria-label="签到小时">
+              <span class="sep muted">:</span>
+              <input class="w-hour" id="sClaimMinute" type="number" min="0" max="59" aria-label="签到分钟">
+            </div>
+            <p class="hint">
+              福利 Token 当日 24:00 清零，所以默认 00:05 领。领取接口是幂等的，重复领不会报错。<br>
+              IDE 运行时它自己也会领；这里的自动签到是「IDE 没开 / 跨天 / 多账号」时的兜底。
+            </p>
+          </div>
 
-      <label>管理密码（留空=不修改；设置后管理接口必须携带）</label>
-      <div class="row">
-        <input class="w-280" id="sPw" type="password" placeholder="不修改请留空">
-        <button class="btn danger" id="clearPw">清除管理密码</button>
-      </div>
-      <div class="hint">清除后管理接口退回「仅本机直连」兜底；若网关监听 <code>0.0.0.0</code> 或被反向代理，
-        控制台将无法访问。</div>
+          <div class="settings-group">
+            <h3>凭据续期</h3>
+            <label class="check" for="sAutoRefresh">
+              <input type="checkbox" id="sAutoRefresh">
+              <span>过期时自行用 refresh_token 续期</span>
+            </label>
+            <label class="check mt-12" for="sWriteBack">
+              <input type="checkbox" id="sWriteBack">
+              <span>续期后回写 state.vscdb（让 IDE 复用）</span>
+            </label>
+            <p class="hint">
+              IDE 运行时它会自己续期，网关会跟随读取；只有 IDE 关闭且凭据过期时才会用到这里的续期能力。<br>
+              回写仅在长度完全一致时做原地字节覆写，并在写入前备份 <code>state.vscdb.codearts2api.bak</code>。
+            </p>
+          </div>
 
-      <div class="row mt-14">
-        <button class="btn primary" id="saveSettings">保存设置</button>
-        <button class="btn danger" id="clearStats">重置统计</button>
-      </div>
-    </div>
-  </section>
-</main>
+          <div class="settings-group">
+            <h3>上游身份头</h3>
+            <p class="group-hint">留空使用与 CodeArts Agent 26.9.902 对齐的缺省值。</p>
+            <div class="field-grid">
+              <div class="field">
+                <label for="sPluginName">plugin-name</label>
+                <input id="sPluginName">
+              </div>
+              <div class="field">
+                <label for="sPluginVersion">plugin-version</label>
+                <input id="sPluginVersion">
+              </div>
+              <div class="field">
+                <label for="sIDEName">ide-name</label>
+                <input id="sIDEName">
+              </div>
+              <div class="field">
+                <label for="sIDEVersion">ide-version</label>
+                <input id="sIDEVersion">
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3>模型别名</h3>
+            <p class="group-hint">JSON 对象，例如 <code>{"gpt-4o":"glm-5.3-flash"}</code>。</p>
+            <textarea id="sAliases" spellcheck="false" aria-label="模型别名 JSON"></textarea>
+          </div>
+
+          <div class="settings-group">
+            <h3>管理密码</h3>
+            <p class="group-hint">留空=不修改；设置后管理接口必须携带。</p>
+            <div class="row">
+              <input class="w-280" id="sPw" type="password" placeholder="不修改请留空" autocomplete="new-password"
+                     aria-label="新的管理密码">
+              <button class="btn danger" id="clearPw">清除管理密码</button>
+            </div>
+            <p class="hint">
+              清除后管理接口退回「仅本机直连」兜底；若网关监听 <code>0.0.0.0</code> 或被反向代理，
+              控制台将无法访问。
+            </p>
+          </div>
+
+          <div class="row between mt-14">
+            <button class="btn primary" id="saveSettings">保存设置</button>
+            <button class="btn danger" id="clearStats">重置统计</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" title="点击关闭"></div>
 
