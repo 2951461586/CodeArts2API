@@ -6,6 +6,8 @@
 # 运行期状态（含 STS 凭据与 refresh_token，绝不入库）
 codearts2api-data.json
 codearts2api-data.json.tmp
+codearts-session.json
+codearts-session.json.tmp
 *.codearts2api.bak
 *.codearts2api.tmp
 
@@ -17,3 +19,9 @@ codearts2api-data.json.tmp
 .recon/
 __pycache__/
 *.pyc
+*.pyo
+
+# Python 工具链缓存（tools/ 下的脚本用过 ruff / pytest）
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/

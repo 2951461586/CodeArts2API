@@ -12,33 +12,26 @@ import (
 	"codearts2api/internal/codearts"
 )
 
-// 每日自动签到。
+// 每日自动领取运营活动福利。
 //
-// 「签到」实际包含两块，都按本地日期各领一次：
+// 「签到」原本包含两块：免费福利 Token（`/api/v1/benefit/claim`）与运营活动奖励
+// （`/v1/ops/delivery` + `/v1/ops/claim`）。2026-10 免费权益通道整体下线
+// （上游 `benefit-gateway-config` 返回 `enabled:false`，相关接口一律报
+// `4000: invalid channel, group not found`），因此这里只剩运营活动。
 //
-//  1. 免费福利 Token —— GET /api/v1/benefit/claim（每日 1000 万 tokens，24:00 清零）
-//  2. 运营活动奖励   —— GET /v1/ops/delivery + POST /v1/ops/claim
-//     线上目前有「每日签到领1000积分」（campaignId=1）等
-//
-// 官方活动说明「登录成功后客户端会自动为你领取该福利」，所以 IDE 运行时
-// 其实已经替我们领了。网关的自动签到是这三种情况的兜底：
-//   - IDE 没开（网关独立跑）
-//   - 跨天（福利当日 24:00 清零，第二天需要重新领）
-//   - 多账号（IDE 只登录了一个账号）
-//
-// 两个接口都是幂等的，重复调用没有副作用。
+// 线上仍有「每日签到领1000积分」（campaignId=1）等 campaign，按本地日期各领一次。
 //
 // **只领服务端说能领的**：邀请奖励（推荐码上有礼）与学生认证奖励必须由
 // 真实事件触发（好友真实注册 / 真实学生认证），服务端会直接拒绝直接领取，
 // 网关也绝不会伪造触发事件。
 
-// claimTickInterval 是签到检查的间隔。
+// claimTickInterval 是领取检查的间隔。
 //
 // 用「定时轮询 + 按本地日期去重」而不是「算准时刻触发一次」，
-// 这样可以避开休眠唤醒、时区切换、进程重启导致的漏签。
+// 这样可以避开休眠唤醒、时区切换、进程重启导致的漏领。
 const claimTickInterval = 5 * time.Minute
 
-// StartClaimLoop 启动后台自动签到。
+// StartClaimLoop 启动后台自动领取。
 func (s *Server) StartClaimLoop(ctx context.Context) {
 	go func() {
 		// 启动后先延迟几秒，等账号导入与模型刷新完成
@@ -62,7 +55,7 @@ func (s *Server) StartClaimLoop(ctx context.Context) {
 	}()
 }
 
-// RunDailyClaim 对尚未签到过的账号各领一次当日福利。
+// RunDailyClaim 对尚未领取过的账号各领一次当日活动福利。
 func (s *Server) RunDailyClaim(ctx context.Context) {
 	st := s.Store.Settings()
 	if !st.AutoClaim {
@@ -78,18 +71,18 @@ func (s *Server) RunDailyClaim(ctx context.Context) {
 			continue
 		}
 		if _, err := s.ClaimForAccount(ctx, a, today); err != nil {
-			log.Printf("账号 %s 自动签到失败: %s", a.DisplayName(), codearts.DescribeClaimError(err))
+			log.Printf("账号 %s 自动领取活动福利失败: %s", a.DisplayName(), codearts.DescribeClaimError(err))
 		}
 	}
 }
 
-// claimWindowOpen 报告当前是否已过每日签到时刻。
+// claimWindowOpen 报告当前是否已过每日领取时刻。
 func claimWindowOpen(now time.Time, hour, minute int) bool {
 	cur := now.Hour()*60 + now.Minute()
 	return cur >= hour*60+minute
 }
 
-// ClaimForAccount 为单个账号执行一次完整签到（免费 Token + 运营活动）。
+// ClaimForAccount 为单个账号领取一次运营活动福利。
 //
 // 返回给控制台展示的一句话。today 为空时按当前本地日期计算。
 func (s *Server) ClaimForAccount(ctx context.Context, a *codearts.Account, today string) (string, error) {
@@ -110,17 +103,7 @@ func (s *Server) ClaimForAccount(ctx context.Context, a *codearts.Account, today
 		firstErr error
 	)
 
-	// 1) 免费福利 Token
-	if res, err := s.Up.ClaimDaily(ctx, sess); err != nil {
-		firstErr = err
-		parts = append(parts, "免费 Token："+codearts.DescribeClaimError(err))
-	} else if res.OK {
-		parts = append(parts, "免费 Token：已领（每日 1000 万）")
-	} else {
-		parts = append(parts, "免费 Token："+res.Message)
-	}
-
-	// 2) 运营活动（每日积分等）
+	// 运营活动（每日积分等）
 	if results, err := s.Up.ClaimDailyWelfare(ctx, sess); err != nil {
 		if firstErr == nil {
 			firstErr = err

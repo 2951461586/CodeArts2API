@@ -402,7 +402,7 @@ func TestLoginFlowMarkSaved(t *testing.T) {
 
 func TestDescribeClaimError(t *testing.T) {
 	cases := map[string]string{
-		"APIG.0602": "凭据（STS security token）已过期，无法签到",
+		"APIG.0602": "凭据（STS security token）已过期，请重新登录",
 		"APIG.0301": "签名校验失败，凭据可能已失效",
 		"4006":      "今日名额已用完",
 		"4004":      "权益不存在或已过期",
@@ -416,17 +416,6 @@ func TestDescribeClaimError(t *testing.T) {
 	}
 	if DescribeClaimError(nil) != "" {
 		t.Error("nil 应返回空串")
-	}
-}
-
-func TestClaimDailyDisabledChannel(t *testing.T) {
-	// 用一个必然失败的端点验证「通道未开放」的分支不会 panic
-	c := NewClient()
-	sess := &Session{AccessKey: "AK", SecretKey: "SK"}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := c.ClaimDaily(ctx, sess); err == nil {
-		t.Log("网络可达，跳过该用例")
 	}
 }
 

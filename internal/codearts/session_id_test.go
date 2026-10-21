@@ -55,7 +55,7 @@ func TestBaseHeadersReusesSessionID(t *testing.T) {
 	c := NewClient()
 	sess := &Session{DomainID: "dom-1", AccessKey: "AKAAA"}
 
-	h1 := c.baseHeaders(sess, "glm-5.3-flash", ChannelBenefit)
+	h1 := c.baseHeaders(sess, "glm-5.3")
 	sid := h1["x-ot-session-id"]
 	if sid == "" {
 		t.Fatal("x-ot-session-id 缺失")
@@ -63,14 +63,14 @@ func TestBaseHeadersReusesSessionID(t *testing.T) {
 	if h1["user-session-id"] != sid {
 		t.Errorf("两个会话头不一致: %q vs %q", sid, h1["user-session-id"])
 	}
-	if h1["maas_type"] != string(ChannelBenefit) {
-		t.Errorf("benefit 通道应带 maas_type，got %q", h1["maas_type"])
+	if _, ok := h1["maas_type"]; ok {
+		t.Errorf("免费权益通道已下线，不应再带 maas_type，got %q", h1["maas_type"])
 	}
-	if h1["model-id"] != "glm-5.3-flash" || h1["model-name"] != "glm-5.3-flash" {
+	if h1["model-id"] != "glm-5.3" || h1["model-name"] != "glm-5.3" {
 		t.Error("model-id / model-name 应与请求体里的模型一致")
 	}
 
-	h2 := c.baseHeaders(sess, "glm-5.3-flash", ChannelBenefit)
+	h2 := c.baseHeaders(sess, "glm-5.3")
 	if h2["x-ot-session-id"] != sid {
 		t.Errorf("同一凭据的第二次请求换了 session id: %q → %q", sid, h2["x-ot-session-id"])
 	}
@@ -79,14 +79,8 @@ func TestBaseHeadersReusesSessionID(t *testing.T) {
 		t.Error("trace id 每次请求都应不同")
 	}
 
-	// 积分通道不带 maas_type
-	h3 := c.baseHeaders(sess, "glm-5.3", ChannelCredit)
-	if _, ok := h3["maas_type"]; ok {
-		t.Error("credit 通道不应带 maas_type")
-	}
-
 	// 没有凭据信息时回退为随机 ID，但两个头仍要一致
-	h4 := c.baseHeaders(&Session{}, "glm-5.3-flash", ChannelBenefit)
+	h4 := c.baseHeaders(&Session{}, "glm-5.3")
 	if h4["x-ot-session-id"] == "" || h4["x-ot-session-id"] != h4["user-session-id"] {
 		t.Errorf("回退路径的会话头不一致: %q / %q", h4["x-ot-session-id"], h4["user-session-id"])
 	}

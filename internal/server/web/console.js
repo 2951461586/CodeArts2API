@@ -193,7 +193,6 @@
     var accts = d.accounts || [];
     var ready = accts.filter(function(a){ return a.enabled && a.status === "ok"; }).length;
     var claimed = accts.filter(function(a){ return a.claimed_today; }).length;
-    var creditCount = (d.models || []).filter(function(m){ return m.channel === "credit"; }).length;
     var soonest = null;
     accts.forEach(function(a){
       if (a.expires_at && (soonest === null || a.expires_at < soonest)) soonest = a.expires_at;
@@ -205,9 +204,9 @@
       { k:"账号（就绪/总）", v: ready + " / " + accts.length,
         sub: soonest ? "最早过期 " + fmtShort(soonest) : "", title: soonest ? fmtTime(soonest) : "" },
       { k:"密钥", v: (d.keys || []).length },
-      { k:"今日签到", v: claimed + " / " + accts.length },
-      { k:"积分模型", v: creditCount,
-        sub: (d.settings || {}).allow_credit_models ? "通道已启用" : "通道已关闭" },
+      { k:"今日领取", v: claimed + " / " + accts.length },
+      { k:"可用模型", v: (d.models || []).length,
+        sub: (d.settings || {}).allow_credit_models ? "计费已开启" : "计费已关闭" },
       { k:"启动时间", v: fmtShort(s.started_at), title: fmtTime(s.started_at) }
     ];
     var box = $("#kpis");
@@ -221,54 +220,20 @@
       box.appendChild(c);
     });
 
-    renderBalance(d.balance);
-
     var tb = $("#models");
     tb.textContent = "";
     var models = d.models || [];
-    if (!models.length) { tb.appendChild(emptyRow(7, "无")); return; }
+    if (!models.length) { tb.appendChild(emptyRow(6, "无")); return; }
     models.forEach(function(m){
-      var isCredit = m.channel === "credit";
-      var chCell = cell("");
-      chCell.appendChild(isCredit ? pill("积分", "warn") : pill("免费额度", "ok"));
       tb.appendChild(row([
-        cell(m.id, "mono"), cell(m.name), chCell,
-        cell(isCredit ? (m.credit || "—") : "—", "mono"),
+        cell(m.id, "mono"), cell(m.name),
+        cell(m.credit || "—", "mono"),
         cell(m.context ? fmtNum(m.context) : "—", "mono"),
         cell(m.max_output ? fmtNum(m.max_output) : "—", "mono"),
         cell(m.description, "muted")
       ]));
     });
     $("#modelHint").textContent = d.upstream_error ? ("最近一次上游刷新失败：" + d.upstream_error) : "";
-  }
-
-  function renderBalance(b){
-    var el = $("#balance");
-    el.textContent = "";
-    el.className = "";
-    if (!b) { el.className = "muted"; el.textContent = "尚未查询。"; return; }
-    var used = b.daily_tokens_used || 0, limit = b.daily_token_limit || 0;
-    var pct = limit > 0 ? Math.min(100, Math.round(used * 100 / limit)) : 0;
-    var quota = mk("div", "quota");
-
-    var head = mk("div", "quota-head");
-    head.appendChild(mk("span", "quota-num", pct + "%"));
-    head.appendChild(mk("span", "quota-unit", "今日已用"));
-    head.appendChild(pill("通道 " + (b.channel || "—"), pct >= 90 ? "err" : "ok"));
-    quota.appendChild(head);
-
-    var bar = mk("div", "bar " + (pct >= 90 ? "err" : (pct >= 70 ? "warn" : "")));
-    var fill = mk("i");
-    fill.style.width = pct + "%";
-    bar.appendChild(fill);
-    quota.appendChild(bar);
-
-    var foot = mk("div", "quota-foot");
-    foot.appendChild(mk("span", null, "已用 " + fmtNum(used) + " / " + fmtNum(limit) + " tokens"));
-    foot.appendChild(mk("span", null, "剩余 " + fmtNum(b.total_balance)));
-    quota.appendChild(foot);
-
-    el.appendChild(quota);
   }
 
   function renderAccounts(d){
@@ -311,7 +276,7 @@
 
       var ops = cell("", "actions-cell");
       ops.appendChild(btn("探活", "xs", function(){ checkin(a.id); }));
-      ops.appendChild(btn("签到", "xs", function(){ claim(a.id); }));
+      ops.appendChild(btn("领福利", "xs", function(){ claim(a.id); }));
       ops.appendChild(btn("重读", "xs", function(){ accountOp("reimport", {id:a.id}); }));
       ops.appendChild(btn("导出", "xs", function(){ exportSession(a.id); }));
       ops.appendChild(btn(a.enabled ? "停用" : "启用", "xs", function(){ accountOp("toggle", {id:a.id}); }));
@@ -388,6 +353,10 @@
     $("#sLoginPort").value = s.login_port || 0;
     $("#sAllowCredit").checked = !!s.allow_credit_models;
     $("#sAllowAnonymous").checked = !!s.allow_anonymous;
+    $("#sRateLimit").checked = !!s.rate_limit_enabled;
+    $("#sRateQPS").value = s.rate_limit_qps || "";
+    $("#sRateBurst").value = s.rate_limit_burst || "";
+    $("#sRateConc").value = (s.rate_limit_concurrency === undefined ? "" : s.rate_limit_concurrency);
     $("#sAutoClaim").checked = !!s.auto_claim;
     $("#sClaimHour").value = (s.claim_after_hour === undefined ? 0 : s.claim_after_hour);
     $("#sClaimMinute").value = (s.claim_after_minute === undefined ? 5 : s.claim_after_minute);
@@ -465,15 +434,15 @@
   }
 
   function claim(id){
-    toast("签到中，请稍候…");
+    toast("领取中，请稍候…");
     return api("/admin/api/claim", {method:"POST", body: id ? {id:id} : {}}).then(function(r){
       var results = r.results || [];
       var bad = results.filter(function(x){ return !x.ok; });
-      toast("签到完成：" + (r.succeeded||0) + "/" + (r.total||0) + " 成功" +
+      toast("领取完成：" + (r.succeeded||0) + "/" + (r.total||0) + " 成功" +
         (bad.length ? "\n" + bad.map(function(x){ return x.name + ": " + x.message; }).join("\n") : ""),
         bad.length ? "err" : "ok");
       return refresh();
-    }).catch(function(e){ toast("签到失败：" + e.message, "err"); });
+    }).catch(function(e){ toast("领取失败：" + e.message, "err"); });
   }
 
   function exportSession(id){
@@ -600,7 +569,7 @@
   var TAB_IDS = { overview:1, accounts:1, keys:1, logs:1, settings:1 };
   var TAB_META = {
     overview: { title:"概览", hint:"运行状态与用量", doc:"概览" },
-    accounts: { title:"账号", hint:"账号池、凭据与签到", doc:"账号" },
+    accounts: { title:"账号", hint:"账号池、凭据与活动福利领取", doc:"账号" },
     keys:     { title:"密钥", hint:"API 密钥的签发与吊销", doc:"密钥" },
     logs:     { title:"日志", hint:"请求元信息与错误", doc:"日志" },
     settings: { title:"设置", hint:"运行参数与访问控制", doc:"设置" }
@@ -745,13 +714,6 @@
       return refresh();
     }).catch(function(e){ toast("刷新失败：" + e.message, "err"); });
   });
-  on("#refreshBalance", function(){
-    toast("查询中…");
-    api("/admin/api/balance").then(function(r){
-      renderBalance(r.balance);
-      toast("额度已更新", "ok");
-    }).catch(function(e){ toast("查询失败：" + e.message, "err"); });
-  });
   on("#addKey", function(){
     api("/admin/api/keys", {method:"POST", body:{name:$("#keyName").value.trim()}}).then(function(r){
       toast("已创建密钥（仅显示一次）：\n" + r.key, "ok");
@@ -787,6 +749,10 @@
       login_port: parseInt($("#sLoginPort").value, 10) || 0,
       allow_credit_models: $("#sAllowCredit").checked,
       allow_anonymous: $("#sAllowAnonymous").checked,
+      rate_limit_enabled: $("#sRateLimit").checked,
+      rate_limit_qps: parseInt($("#sRateQPS").value, 10) || 0,
+      rate_limit_burst: parseInt($("#sRateBurst").value, 10) || 0,
+      rate_limit_concurrency: parseInt($("#sRateConc").value, 10) || 0,
       auto_claim: $("#sAutoClaim").checked,
       claim_after_hour: parseInt($("#sClaimHour").value, 10) || 0,
       claim_after_minute: parseInt($("#sClaimMinute").value, 10) || 0,

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
+	"codearts2api/internal/ratelimit"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
 )
@@ -25,6 +28,8 @@ type Server struct {
 	Cred   *codearts.Manager
 	Reg    *registry.Registry
 	Logins *codearts.LoginManager
+	// Limits 是按 API 密钥的自我保护限流（QPS + 在飞并发）。
+	Limits *ratelimit.Limiter
 
 	// 上游模型清单 / 额度的内存缓存
 	cache *modelCache
@@ -43,6 +48,7 @@ func New(st *store.Store) *Server {
 	}
 	s.Cred.Logf = log.Printf
 	s.Logins = codearts.NewLoginManager(up)
+	s.Limits = ratelimit.New(rateLimitConfig(st.Settings()), nil)
 	return s
 }
 
@@ -58,10 +64,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/healthz", s.handleHealth)
 
-	// 推理
-	mux.HandleFunc("/v1/models", s.withAuth(s.handleModels))
-	mux.HandleFunc("/v1/chat/completions", s.withAuth(s.handleChatCompletions))
-	mux.HandleFunc("/v1/messages", s.withAuth(s.handleAnthropicMessages))
+	// 推理（鉴权在前，限流在后：限流器只看到已通过鉴权的密钥）
+	mux.HandleFunc("/v1/models", s.withAuth(s.withRateLimit(errOpenAI, s.handleModels)))
+	mux.HandleFunc("/v1/chat/completions", s.withAuth(s.withRateLimit(errOpenAI, s.handleChatCompletions)))
+	mux.HandleFunc("/v1/messages", s.withAuth(s.withRateLimit(errAnthropic, s.handleAnthropicMessages)))
 
 	// 控制台 API（统一走管理鉴权 + 同源校验）
 	mux.HandleFunc("/admin/api/state", s.withAdminAuth(s.handleAdminState))
@@ -72,7 +78,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/settings", s.withAdminAuth(s.handleAdminSettings))
 	mux.HandleFunc("/admin/api/checkin", s.withAdminAuth(s.handleAdminCheckin))
 	mux.HandleFunc("/admin/api/models/refresh", s.withAdminAuth(s.handleAdminRefreshModels))
-	mux.HandleFunc("/admin/api/balance", s.withAdminAuth(s.handleAdminBalance))
 	mux.HandleFunc("/admin/api/claim", s.withAdminAuth(s.handleAdminClaim))
 	mux.HandleFunc("/admin/api/welfare", s.withAdminAuth(s.handleAdminWelfare))
 	mux.HandleFunc("/admin/api/invite", s.withAdminAuth(s.handleAdminInvite))
@@ -195,6 +200,81 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
+	}
+}
+
+// errStyle 决定错误响应用哪套协议的结构。
+//
+// 两套协议的 HTTP 状态码与语义一致，但错误体的 JSON 形状不同：
+// OpenAI 是 {"error":{...}}，Anthropic 是 {"type":"error","error":{...}}。
+type errStyle int
+
+const (
+	errOpenAI errStyle = iota
+	errAnthropic
+)
+
+// anonymousLimitKey 是未签发密钥时所有匿名调用共用的限流桶。
+const anonymousLimitKey = "\x00anonymous"
+
+// withRateLimit 按 API 密钥做自我保护限流（QPS + 在飞并发）。
+//
+// 必须挂在 withAuth **之后**：限流器只看到已通过鉴权的密钥，桶的数量因此被
+// 已签发密钥数封顶，不需要回收；未签发密钥时所有匿名调用共用一个桶。
+//
+// 拒绝发生在调用上游之前 —— 被限流的请求不消耗账号额度。
+func (s *Server) withRateLimit(style errStyle, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := extractKey(r)
+		if key == "" {
+			key = anonymousLimitKey
+		}
+		release, retryAfter, ok := s.Limits.Acquire(key)
+		if !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(retryAfter)))
+			writeAPIErr(w, style, &apierr.RateLimited{RetryAfter: retryAfter})
+			return
+		}
+		defer release()
+		next(w, r)
+	}
+}
+
+// retryAfterSeconds 把等待时长转成 Retry-After 的秒数（向上取整、至少 1）。
+func retryAfterSeconds(d time.Duration) int {
+	secs := int(math.Ceil(d.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
+}
+
+// writeAPIErr 按指定协议风格写出错误。
+//
+// 状态码与两套 error.type 一律由 apierr.From 决定 —— 这里只选形状，不选语义。
+func writeAPIErr(w http.ResponseWriter, style errStyle, err error) {
+	e := apierr.From(err)
+	if style == errAnthropic {
+		writeAnthropicErr(w, e.Status, e.Anthropic, err.Error())
+		return
+	}
+	writeErr(w, e.Status, err.Error(), e.OpenAI)
+}
+
+// rateLimitConfig 把设置转换为限流参数。
+func rateLimitConfig(st store.Settings) ratelimit.Config {
+	return ratelimit.Config{
+		Enabled:     st.RateLimitEnabled,
+		QPS:         st.RateLimitQPS,
+		Burst:       st.RateLimitBurst,
+		Concurrency: st.RateLimitConcurrency,
+	}
+}
+
+// ApplyRateLimit 把设置里的限流参数同步到限流器（热更新）。
+func (s *Server) ApplyRateLimit() {
+	if s.Limits != nil {
+		s.Limits.SetConfig(rateLimitConfig(s.Store.Settings()))
 	}
 }
 
@@ -349,29 +429,33 @@ func (s *Server) resolveOptions() codearts.ResolveOptions {
 // sanitizedSettings 返回可下发给前端的设置（管理密码不外泄）。
 func sanitizedSettings(st store.Settings) map[string]any {
 	return map[string]any{
-		"model_aliases":       st.ModelAliases,
-		"default_model":       st.DefaultModel,
-		"force_model":         st.ForceModel,
-		"request_timeout_sec": st.RequestTimeout,
-		"max_retries":         st.MaxRetries,
-		"log_keep":            st.LogKeep,
-		"cors_origin":         st.CORSOrigin,
-		"auto_refresh":        st.AutoRefresh,
-		"allow_credit_models": st.AllowCreditModels,
-		"allow_anonymous":     st.AllowAnonymous,
-		"auto_claim":          st.AutoClaim,
-		"claim_after_hour":    st.ClaimAfterHour,
-		"claim_after_minute":  st.ClaimAfterMinute,
-		"write_back_to_ide":   st.WriteBackToIDE,
-		"live_ttl_sec":        st.LiveTTLSeconds,
-		"user_data_dir":       st.UserDataDir,
-		"login_port":          st.LoginPort,
-		"plugin_name":         st.PluginName,
-		"plugin_version":      st.PluginVersion,
-		"ide_name":            st.IDEName,
-		"ide_version":         st.IDEVersion,
-		"language":            st.Language,
-		"admin_password_set":  st.AdminPassword != "",
+		"model_aliases":          st.ModelAliases,
+		"default_model":          st.DefaultModel,
+		"force_model":            st.ForceModel,
+		"request_timeout_sec":    st.RequestTimeout,
+		"max_retries":            st.MaxRetries,
+		"log_keep":               st.LogKeep,
+		"cors_origin":            st.CORSOrigin,
+		"auto_refresh":           st.AutoRefresh,
+		"allow_credit_models":    st.AllowCreditModels,
+		"allow_anonymous":        st.AllowAnonymous,
+		"rate_limit_enabled":     st.RateLimitEnabled,
+		"rate_limit_qps":         st.RateLimitQPS,
+		"rate_limit_burst":       st.RateLimitBurst,
+		"rate_limit_concurrency": st.RateLimitConcurrency,
+		"auto_claim":             st.AutoClaim,
+		"claim_after_hour":       st.ClaimAfterHour,
+		"claim_after_minute":     st.ClaimAfterMinute,
+		"write_back_to_ide":      st.WriteBackToIDE,
+		"live_ttl_sec":           st.LiveTTLSeconds,
+		"user_data_dir":          st.UserDataDir,
+		"login_port":             st.LoginPort,
+		"plugin_name":            st.PluginName,
+		"plugin_version":         st.PluginVersion,
+		"ide_name":               st.IDEName,
+		"ide_version":            st.IDEVersion,
+		"language":               st.Language,
+		"admin_password_set":     st.AdminPassword != "",
 	}
 }
 

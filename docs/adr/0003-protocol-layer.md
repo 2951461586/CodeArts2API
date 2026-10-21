@@ -1,3 +1,11 @@
+---
+id: adr-0003
+type: architecture-design
+title: "ADR 0003：把 Anthropic ↔ OpenAI 转换抽成 internal/protocol"
+status: active
+parent: architecture
+---
+
 # ADR 0003：把 Anthropic ↔ OpenAI 转换抽成 `internal/protocol`
 
 - 状态：已采纳

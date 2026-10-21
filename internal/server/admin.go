@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
@@ -48,7 +49,7 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cache.mu.RLock()
-	balance, balanceAt, cacheErr := s.cache.balance, s.cache.balanceAt, s.cache.err
+	cacheErr := s.cache.err
 	s.cache.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -58,8 +59,6 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 		"models":         s.Reg.List(s.Store.Settings().ModelAliases),
 		"settings":       sanitizedSettings(s.Store.Settings()),
 		"stats":          s.Store.Stats(),
-		"balance":        balance,
-		"balance_at":     balanceAt.Unix(),
 		"upstream_error": cacheErr,
 	})
 }
@@ -291,6 +290,10 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		AutoRefresh       *bool             `json:"auto_refresh"`
 		AllowCreditModels *bool             `json:"allow_credit_models"`
 		AllowAnonymous    *bool             `json:"allow_anonymous"`
+		RateLimitEnabled  *bool             `json:"rate_limit_enabled"`
+		RateLimitQPS      *int              `json:"rate_limit_qps"`
+		RateLimitBurst    *int              `json:"rate_limit_burst"`
+		RateLimitConc     *int              `json:"rate_limit_concurrency"`
 		WriteBackToIDE    *bool             `json:"write_back_to_ide"`
 		LiveTTLSeconds    *int              `json:"live_ttl_sec"`
 		UserDataDir       *string           `json:"user_data_dir"`
@@ -318,6 +321,10 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.AutoRefresh, body.AutoRefresh)
 		setIf(&st.AllowCreditModels, body.AllowCreditModels)
 		setIf(&st.AllowAnonymous, body.AllowAnonymous)
+		setIf(&st.RateLimitEnabled, body.RateLimitEnabled)
+		setIf(&st.RateLimitQPS, body.RateLimitQPS)
+		setIf(&st.RateLimitBurst, body.RateLimitBurst)
+		setIf(&st.RateLimitConcurrency, body.RateLimitConc)
 		setIf(&st.WriteBackToIDE, body.WriteBackToIDE)
 		setIf(&st.LiveTTLSeconds, body.LiveTTLSeconds)
 		setIf(&st.UserDataDir, body.UserDataDir)
@@ -340,6 +347,8 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	s.persist()
 	// 身份头变更后重建上游客户端
 	s.ApplyIdentity()
+	// 限流参数变更后立即生效（不用重启）
+	s.ApplyRateLimit()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings": sanitizedSettings(s.Store.Settings())})
 }
 
@@ -385,8 +394,12 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
 		if err == nil {
-			probe := s.defaultProbeModel()
-			err = s.Up.Probe(ctx, sess, probe.ID, probe.Channel)
+			probe, ok := s.defaultProbeModel()
+			if !ok {
+				err = &apierr.ModelNotFound{Name: s.Store.Settings().DefaultModel}
+			} else {
+				err = s.Up.Probe(ctx, sess, probe.ID)
+			}
 		}
 		cancel()
 		ok := err == nil
@@ -408,14 +421,10 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 
 // defaultProbeModel 返回探活用的模型。
 //
-// 探活永远走免费权益通道的模型，避免「点一下探活就扣积分」。
-func (s *Server) defaultProbeModel() registry.Model {
+// 探活会消耗极少量积分（max_tokens=8），控制台上已标注。
+func (s *Server) defaultProbeModel() (registry.Model, bool) {
 	st := s.Store.Settings()
-	m := s.Reg.Resolve(st.DefaultModel, st.ModelAliases)
-	if m.IsCredit() {
-		m = s.Reg.Resolve("glm-5.3-flash", st.ModelAliases)
-	}
-	return m
+	return s.Reg.Resolve(st.DefaultModel, st.ModelAliases)
 }
 
 // setIf 仅在指针非空时赋值。

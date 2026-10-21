@@ -3,30 +3,32 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
 	"time"
 
 	"codearts2api/internal/apierr"
-	"codearts2api/internal/codearts"
 	"codearts2api/internal/registry"
 )
 
-// modelCache 缓存上游模型清单与额度快照。
+// modelCache 记录模型清单的刷新状态（清单本体在 registry 里）。
 type modelCache struct {
-	mu        sync.RWMutex
-	benefit   []registry.Model
-	builtin   []registry.Model
-	balance   *codearts.TokensBalance
-	balanceAt time.Time
-	err       string
-	loadedAt  time.Time
+	mu       sync.RWMutex
+	err      string
+	loadedAt time.Time
 }
 
 func newModelCache() *modelCache { return &modelCache{} }
 
-// Refresh 从上游拉取模型清单（benefit + builtin）并写入注册表。
+// errEmptyModelList 表示上游 200 但没返回任何可用模型。
+var errEmptyModelList = errors.New("上游未返回任何可用模型")
+
+// RefreshModels 从上游拉取模型清单并写入注册表。
+//
+// 2026-10 起免费权益通道下线，模型清单只有一个来源：`GET /v1/model/builtin`
+// （积分通道）。拉取失败时保留现有清单，只记录错误。
 func (s *Server) RefreshModels(ctx context.Context) error {
 	acct := s.Store.NextAccount()
 	if acct == nil {
@@ -37,26 +39,18 @@ func (s *Server) RefreshModels(ctx context.Context) error {
 		return err
 	}
 
-	var benefit []registry.Model
-	if cfg, err := s.Up.FetchGatewayConfig(ctx, sess); err == nil {
-		benefit = registry.FromGatewayConfig(cfg.Models)
-	} else {
+	list, err := s.Up.FetchBuiltinModels(ctx, sess)
+	if err != nil {
 		return err
 	}
-
-	var builtin []registry.Model
-	if list, err := s.Up.FetchBuiltinModels(ctx, sess); err == nil {
-		builtin = registry.FromBuiltin(list)
+	models := registry.FromBuiltin(list)
+	if len(models) == 0 {
+		return errEmptyModelList
 	}
 
-	s.Reg.Replace(benefit)
-	if len(builtin) > 0 {
-		s.Reg.ReplaceBuiltin(builtin)
-	}
+	s.Reg.Replace(models)
 
 	s.cache.mu.Lock()
-	s.cache.benefit = benefit
-	s.cache.builtin = builtin
 	s.cache.loadedAt = time.Now()
 	s.cache.err = ""
 	s.cache.mu.Unlock()
@@ -97,13 +91,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			"created":  now,
 			"owned_by": "codearts",
 			"codearts": map[string]any{
-				"name":        m.Name,
-				"context":     m.Context,
-				"max_output":  m.MaxOutput,
-				"source":      m.Source,
-				"channel":     m.Channel,
+				"name":       m.Name,
+				"context":    m.Context,
+				"max_output": m.MaxOutput,
+				"source":     m.Source,
+				// 免费权益通道已下线：所有模型都走积分通道、真实扣费。
+				"channel":     "credit",
+				"billable":    true,
 				"credit":      m.Credit,
-				"billable":    m.IsCredit(),
 				"description": m.Desc,
 			},
 		})
@@ -127,40 +122,6 @@ func (s *Server) handleAdminRefreshModels(w http.ResponseWriter, r *http.Request
 		"ok":     true,
 		"models": s.Reg.List(s.Store.Settings().ModelAliases),
 	})
-}
-
-// handleAdminBalance 查询额度余额（带 60 秒缓存）。
-func (s *Server) handleAdminBalance(w http.ResponseWriter, r *http.Request) {
-	s.cache.mu.RLock()
-	bal, at := s.cache.balance, s.cache.balanceAt
-	s.cache.mu.RUnlock()
-	if bal != nil && time.Since(at) < 60*time.Second {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "balance": bal, "cached": true})
-		return
-	}
-
-	acct := s.Store.NextAccount()
-	if acct == nil {
-		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	sess, err := s.Cred.Session(ctx, acct, s.resolveOptions())
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error(), "upstream_error")
-		return
-	}
-	out, err := s.Up.FetchBalance(ctx, sess)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error(), "upstream_error")
-		return
-	}
-	s.cache.mu.Lock()
-	s.cache.balance = out
-	s.cache.balanceAt = time.Now()
-	s.cache.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "balance": out, "account": acct.DisplayName()})
 }
 
 // upstreamErrorPayload 尝试从上游错误响应里提取可读信息。

@@ -138,7 +138,7 @@ data: [DONE]
 func TestChatOnceFallsBackToStreamAggregation(t *testing.T) {
 	s := newTestServer(t, 1, 1)
 	s.Cred = codearts.NewManager(s.Up)
-	s.Reg.Replace([]registry.Model{{ID: "glm-5.3", Channel: codearts.ChannelBenefit}})
+	s.Reg.Replace([]registry.Model{{ID: "glm-5.3"}})
 
 	// 凭据必须「有效」，否则 Manager 会走续期分支（本测试不覆盖续期）。
 	s.Store.SetAccountSession("a", &codearts.Session{
@@ -180,7 +180,7 @@ func TestChatOnceFallsBackToStreamAggregation(t *testing.T) {
 	})}
 
 	acct := s.Store.Account("a")
-	model := registry.Model{ID: "glm-5.3", Channel: codearts.ChannelBenefit}
+	model := registry.Model{ID: "glm-5.3"}
 	raw, err := s.chatOnce(t.Context(), acct, model, []byte(`{"model":"glm-5.3","stream":false,"messages":[]}`))
 	if err != nil {
 		t.Fatalf("聚合兜底失败: %v", err)
@@ -236,7 +236,11 @@ func TestChatOnceFallsBackToStreamAggregation(t *testing.T) {
 	//
 	// 生产路径每个请求都会重新 Resolve 出模型（见 handleChatCompletions），
 	// 所以这里也要重新取一次，否则拿到的还是调用方手里的旧副本。
-	model = s.Reg.Resolve("glm-5.3", nil)
+	resolved, ok := s.Reg.Resolve("glm-5.3", nil)
+	if !ok {
+		t.Fatal("glm-5.3 应能解析出来")
+	}
+	model = resolved
 	if !model.StreamOnly {
 		t.Fatal("模型没有被标记为 StreamOnly，下次仍会先发一次必然失败的非流式请求")
 	}

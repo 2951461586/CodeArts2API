@@ -1,3 +1,11 @@
+---
+id: adr-0002
+type: submodule-design
+title: "ADR 0002：控制台拆为三个内嵌文件，CSP 去掉 unsafe-inline"
+status: active
+parent: server
+---
+
 # ADR 0002：控制台拆为三个内嵌文件，CSP 去掉 `unsafe-inline`
 
 - 状态：已采纳

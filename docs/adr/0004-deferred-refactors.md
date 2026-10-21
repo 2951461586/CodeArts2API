@@ -1,3 +1,11 @@
+---
+id: adr-0004
+type: architecture-design
+title: "ADR 0004：有意推迟的重构"
+status: active
+parent: architecture
+---
+
 # ADR 0004：有意推迟的重构
 
 - 状态：已记录（未实施）
@@ -20,10 +28,14 @@
 | 凭据存储 / 解密 | `session_windows.go`、`session_other.go`、`sqlite.go` |
 | 上游传输 | `client.go`、`signer.go`、`sse.go`、`errors.go` |
 | 认证流程 | `login.go`、`refresh.go`、`manager.go` |
-| 业务功能 | `benefit.go`、`welfare.go` |
+| 业务功能 | `welfare.go` |
 
 **建议目标**：`internal/credential` / `internal/upstream` /
 `internal/authflow` / `internal/benefit`。
+
+> 2026-10 更新：`benefit.go` 已随免费权益通道下线删除（见
+> [ADR 0005](0005-remove-benefit-channel.md)），第四类关注点现在只剩 `welfare.go`，
+> 「拆 `internal/benefit`」这一项随之取消。
 
 **为什么现在不做**：
 
@@ -44,7 +56,7 @@
 1. 补 `sqlite.go` 读取路径（多页 / 溢出页 / 损坏页）与 `refresh.go` 失败分支的测试；
 2. 抽出 `internal/credential`（只依赖标准库 + `store` 的错误类型）；
 3. 再抽 `internal/upstream`（client + signer + sse + errors）；
-4. `benefit` / `welfare` 最后拆，因为它们依赖上游客户端。
+4. `welfare` 最后拆，因为它依赖上游客户端。
 
 ### 2. `Server` 的依赖接口化
 

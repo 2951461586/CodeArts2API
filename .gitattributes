@@ -1,0 +1,29 @@
+# 统一换行符：仓库内一律 LF。
+#
+# 背景：Windows 上 checkout / 编辑器回写会把文本文件变成 CRLF，之后任何一次
+# 保存都会让 git 认为「整个文件都改了」（README.md 曾因此产生 730 行的假 diff）。
+# 这里显式锁定 eol=lf，让 git 在 checkout 时就写 LF，与 core.autocrlf 无关。
+* text=auto eol=lf
+
+# 二进制：不做换行符转换，也不做文本 diff
+*.exe   binary
+*.dll   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
+
+# 主要文本类型显式声明（避免 eol=auto 在个别平台/工具下漂移）
+*.go       text eol=lf
+*.md       text eol=lf
+*.js       text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.py       text eol=lf
+Makefile   text eol=lf
+Dockerfile text eol=lf

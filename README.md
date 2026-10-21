@@ -6,12 +6,11 @@
 复用桌面端已登录的会话凭据，无需另申请密钥；纯 Go 标准库实现，单文件约 10 MB，
 零外部依赖。
 
-- 🎁 **免费福利 Token** —— 复用官方[限时领取 Tokens](https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html)活动，**每人每日 1000 万 Tokens**
-- 💳 **积分通道** —— 需要时也可调用 `glm-5.3` / `GLM-5.2` 等订阅模型（按积分计费，控制台可一键关闭）
-- 🔁 **每日自动签到** —— 定时领取免费福利 Token **与每日积分**，IDE 没开 / 跨天 / 多账号都不漏
+- 💳 **积分通道（唯一通道）** —— 免费权益通道已于 2026-10 下线，全部模型按积分计费（`glm-5.3` / `GLM-5.2` / `deepseek-v4.1-flash` …），控制台可一键停用
+- 🔁 **每日自动领取活动福利** —— 定时领取运营活动奖励（如「每日签到领 1000 积分」），IDE 没开 / 跨天 / 多账号都不漏
 - 🔐 **三种凭据来源** —— 桌面端登录态导入 / 本地浏览器登录（OAuth 回调）/ 手工录入
 - 🔌 **双协议** —— `/v1/chat/completions`（OpenAI）+ `/v1/messages`（Anthropic），含思维链与工具调用
-- 🖥️ **内嵌 Web 控制台** —— 账号池 / 密钥 / 日志 / 额度进度 / 模型通道一目了然
+- 🖥️ **内嵌 Web 控制台** —— 账号池 / 密钥 / 日志 / 模型清单与积分倍率一目了然
 
 ```text
 ┌──────────────┐   /v1/chat/completions   ┌───────────────┐  SDK-HMAC-SHA256 签名   ┌───────────────────────────────────┐
@@ -34,12 +33,13 @@
 > 安全模型见 [`SECURITY.md`](SECURITY.md)，文档总览见 [`docs/index.md`](docs/index.md)。
 
 **目录**：[一、快速开始](#一快速开始) ·
-[二、模型与两条通道](#二支持的模型与两条通道) · [三、凭据与续期](#三凭据与续期) ·
+[二、支持的模型与计费](#二支持的模型与计费) · [三、凭据与续期](#三凭据与续期) ·
 [四、控制台](#四控制台) · [五、HTTP 接口](#五http-接口) ·
 [六、工程结构](#六工程结构) · [七、开发与自检](#七开发与自检) ·
 [八、安全说明](#八安全说明) · [九、免责声明](#九免责声明) · [十、许可证](#十许可证)
 
-**其它文档**：[文档导航](docs/index.md) · [上游协议](docs/UPSTREAM.md) ·
+**其它文档**：[文档导航](docs/index.md) · [产品目标](goal-and-requirements.md) ·
+[架构与不变量](architecture.md) · [上游协议](docs/UPSTREAM.md) ·
 [故障排查](docs/TROUBLESHOOTING.md) · [安全策略](SECURITY.md) · [逆向勘察](docs/RECON.md)
 
 ---
@@ -94,90 +94,39 @@ curl http://127.0.0.1:10087/v1/messages \
 
 ---
 
-## 二、支持的模型与两条通道
+## 二、支持的模型与计费
 
-CodeArts 上游用请求头 **`maas_type`** 区分两条完全不同的通道 ——
-同一个模型名在不同通道下是否可用、是否计费都不一样：
+2026-10 起，CodeArts 上游**只剩积分（计费）通道**：请求不再携带 `maas_type`，
+所有模型都按 `credit[].ratio_display` 倍率**真实扣积分**。模型清单只有一个来源：
 
-| 通道 | 请求头 | 计费 | 模型清单来源 |
-| --- | --- | --- | --- |
-| **免费福利 Token**（benefit） | `maas_type: benefit` | 消耗福利 Token（每日 1000 万，当日 24:00 清零） | `GET https://opengw.developer.huaweicloud.com/api/v1/gateway/config` |
-| **积分**（credit） | **不带** `maas_type` | 按积分计费，真实扣费 | `GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin` |
+```text
+GET https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin
+    Header: Agent-Type: PromptCenter
+```
 
-网关会按模型自动选通道，客户端**不需要关心**这件事。
+### 2.1 免费权益通道已下线（2026-10）
 
-### 2.1 免费福利 Token 活动
+官方「限时领取 Tokens」活动（每人每日 1000 万 Tokens）结束后，上游把整条
+benefit 通道一并关掉了。实测结果：
 
-CodeArts 官方有一个**限时领取 Tokens** 活动：登录后客户端自动领取，
-**每位用户每日 1000 万 Tokens**。
-
-| 项目 | 说明 |
+| 端点 | 结果 |
 | --- | --- |
-| 适用人群 | 所有用户 |
-| 每日额度 | **1000 万 Tokens / 人 / 天** |
-| 清零规则 | **当日 24:00 清零，不累积至次日** |
-| 领取方式 | 登录成功后客户端**自动领取**（本网关复用同一份凭据，因此自动共享同一份额度） |
-| 开始时间 | 码道 IDE / 插件：2026-08-19 22:00<br>桌面端 / 网页端：2026-09-15 00:00<br>小程序：2026-09-17 00:00（均为 UTC+8） |
-| 结束时间 | 另行通知（官方保留随时终止或调整活动的权利） |
-| 活动模型 | `deepseek-v4.1-flash`、`glm-5.3-flash`、`deepseek-v4-flash-0731`、`deepseek-v4-pro-0813` |
+| `GET /v1/benefit-gateway-config` | `{"enabled":false,...}` |
+| `GET /api/v1/gateway/config`（福利模型清单） | `4000: invalid channel, group not found` |
+| `GET /api/v1/benefit/claim`（领福利 Token） | `4000: invalid channel, group not found` |
+| `GET /api/v1/user/tokens/balance`（每日额度） | `4000: invalid channel, group not found` |
 
-> 官方活动页：<https://support.huaweicloud.com/offers-codeartsagent/codeartsagent_offers_0001.html>
-> （更新于 2026-09-23）
+因此网关做了对应清理（决策与代价见 [ADR 0005](docs/adr/0005-remove-benefit-channel.md)）：
 
-四个活动模型的规格：
+- **删除** benefit 通道的全部代码与 UI：福利模型清单、额度进度条、免费福利 Token 签到
+- 请求头不再发送 `maas_type`
+- 内置兜底清单换成当前 8 个积分模型
+- **无法识别的模型名直接返回 `404`**，不再回落到任何模型 —— 现在每个模型都真实扣费，
+  猜错模型等于替用户乱花钱
+- 控制台的「活动福利」照旧可用（那是运营活动子系统，与 benefit 通道无关）
 
-| model_id | 上下文 | 最大输出 |
-| --- | --- | --- |
-| `glm-5.3-flash` | 1,048,576 | 131,072 |
-| `deepseek-v4-flash-0731` | 1,048,576 | 393,216 |
-| `deepseek-v4-pro-0813` | 1,000,000 | 393,216 |
-| `deepseek-v4.1-flash` | 1,000,000 | 384,000 |
-
-#### ⚠️ 福利 Token 与积分包**互不相通**
-
-官方 FAQ 明确说明：这四个是**专属福利模型**，**仅消耗福利 Token**。
-福利 Token 额度用完后，这四款模型将**不可再使用**，**也不能**用积分包继续跑 ——
-只能改用积分通道的模型（`glm-5.3` / `GLM-5.2` 等）。
-
-这也是网关把两条通道严格分开、并且**对无法识别的模型名默认落到免费通道**的原因：
-宁可报错，也不静默扣积分。
-
-#### ⚠️ 额度按账号共享
-
-控制台「概览」里的进度条与 CodeArts Agent 用的是同一份配额。
-网关跑太多会把 IDE 当天的额度吃光；额度每天 24:00 重置，不会累积。
-
-#### 每日自动签到
-
-网关内置**每日自动签到**，默认开启、每天 00:05 执行（可在控制台改时刻或关闭）。
-一次签到会同时处理两件事：
-
-1. **免费福利 Token** —— `GET /api/v1/benefit/claim`（就是上面这 1000 万 tokens）
-2. **活动福利积分** —— `GET /v1/ops/delivery` + `POST /v1/ops/claim`（见 [2.2](#22-活动福利积分)）
-
-官方活动页说明「登录成功后客户端会自动为你领取该福利」，所以 IDE 运行时其实
-已经替我们领了。网关的自动签到是这三种情况的兜底：
-
-- **IDE 没开** —— 网关独立跑的时候
-- **跨天** —— 福利 Token 当日 24:00 清零，第二天需要重新领
-- **多账号** —— IDE 只登录了一个账号
-
-领取接口 `GET /api/v1/benefit/claim` 是**幂等**的：当天已领过再领一次仍返回
-`0000 success`，额度不变，所以重复领取没有副作用。
-
-> 实现上用「每 5 分钟轮询 + 按本地日期去重」，而不是算准 00:05 触发一次 ——
-> 这样能避开休眠唤醒、时区切换、进程重启导致的漏签。
-> 签到失败只记错误、不写日期，下一轮会自动重试。
-
-控制台「账号」页有 **立即签到领福利** 按钮，概览页有 `今日签到 n/m` 计数。
-
-#### ⚠️ 活动条款要点
-
-- **不可转让**：权益不可转让，不得兑换现金、优惠券。
-- **取消与收回**：若用户违反账号或服务相关的义务、条款、政策、法律或规则，
-  华为云保留**立即取消、作废并收回**已发放权益的权利。
-- **活动期限 / 变更**：官方保留随时终止或调整活动及其条款的权利，
-  变更将通过更新活动页或其他通知形式告知。
+> 想恢复免费额度只能等官方重新开放活动。网关不会再静默尝试 benefit 通道，
+> 也不会把「通道未开放」伪装成成功。
 
 ### 2.2 活动福利（积分）
 
@@ -198,7 +147,7 @@ POST /v1/ops/claim                   {campaignId, idempotentKey, channel:"IDE"}
 POST /v1/ops/invite/generate         {campaignId} 生成专属邀请码与邀请链接
 ```
 
-**自动签到的边界**：网关只领**服务端明确标记 `claimable: true` 且靠时间推进**的活动。
+**自动领取的边界**：网关只领**服务端明确标记 `claimable: true` 且靠时间推进**的活动。
 
 实测服务端对不能直接领的活动会明确拒绝：
 
@@ -221,23 +170,28 @@ POST /v1/ops/invite/generate         {campaignId} 生成专属邀请码与邀请
 > 💡 注意参与条件：如果你用的是 **Tokens 制套餐**，需要先免费变更为**积分制套餐**
 > 才能参与活动（IDE 侧对应「活动福利」入口的提示）。
 
-### 2.3 积分通道（计费）
+### 2.3 可用模型（积分通道）
 
-需要订阅 / 企业套餐，按上游返回的 `credit[].ratio_display` 倍率扣积分：
+需要订阅 / 企业套餐，按上游返回的 `credit[].ratio_display` 倍率扣积分。
+以下是 2026-10 实测的完整清单（`/v1/models` 与之一致）：
 
-| model_id | 类别 | 积分倍率 |
-| --- | --- | --- |
-| `glm-5.3` | 文本生成 | 0.79x |
-| `GLM-5.2` | 文本生成 | 0.7x |
-| `openpangu-2.0-pro` | 文本生成 | 0.7x |
-| `glm-5.2-sft-harmony` | 文本生成 | 0.7x |
-| `openpangu-2.0-flash` | 文本生成 | 0.32x |
-| `Qwen3-VL-235B` | 图片理解 | — |
-| `kimi-k2.6-vl` | 图片理解 | — |
+| model_id | 名称 | 类别 | 积分倍率 |
+| --- | --- | --- | --- |
+| `glm-5.3` | GLM-5.3 | 文本生成 | 0.79x |
+| `GLM-5.2` | GLM-5.2 | 文本生成 | 0.7x |
+| `glm-5.2-sft-harmony` | GLM-5.2-ArkTS-SPARK | 文本生成 | 0.7x |
+| `openpangu-2.0-pro` | OpenPangu-2.0-Pro | 文本生成 | 0.7x |
+| `openpangu-2.0-flash` | OpenPangu-2.0-Flash | 文本生成 | 0.32x |
+| `deepseek-v4.1-flash` | DeepSeek-V4.1-Flash | 文本生成 | 0.18x |
+| `Qwen3-VL-235B` | Qwen3-VL-235B | 图片理解 | — |
+| `kimi-k2.6-vl` | Kimi-K2.6-VL | 图片理解 | — |
 
-> ⚠️ **积分通道会真实扣费。** 控制台可一键关闭（设置 → 允许积分模型），
-> 关闭后只放行免费额度通道的模型。
-> 「探活」按钮永远使用免费通道的模型，不会因为点一下而扣积分。
+> 图片理解类模型上游没有公布计费档，`credit` 字段为空（控制台显示「—」）。
+> 上游也不返回上下文长度，因此 `context` / `max_output` 都是 0。
+
+> ⚠️ **所有模型都会真实扣费。** 控制台的「允许真实消耗积分」开关关闭后，
+> `/v1/*` 的模型调用一律返回 `403`（只在临时停服 / 排障时用）。
+> 「探活」按钮会用默认模型发一次 `max_tokens=8` 的请求，消耗极少但**不为零**。
 
 #### 已知上游怪癖：`glm-5.3` 只支持流式
 
@@ -265,23 +219,32 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 内置别名（可在控制台改成任意映射）：
 
 ```json
-{"gpt-4o":"glm-5.3-flash","gpt-5":"deepseek-v4-pro-0813",
- "claude-sonnet-4":"deepseek-v4-pro-0813","deepseek-chat":"deepseek-v4-flash-0731"}
+{"gpt-4o":"glm-5.3","gpt-5":"GLM-5.2",
+ "claude-sonnet-4":"GLM-5.2","deepseek-chat":"deepseek-v4.1-flash"}
 ```
 
-别名会继承目标模型的通道。**无法识别的模型名默认落到免费额度通道** ——
-宁可报错，也不静默扣积分。
+完整映射：通用档（`gpt-4o` / `gpt-4` / `glm-4` / `codearts` …）→ `glm-5.3`，
+旗舰档（`gpt-5` / `claude-3-5-sonnet` / `claude-sonnet-4` / `deepseek-reasoner` …）→ `GLM-5.2`，
+`deepseek-chat` → `deepseek-v4.1-flash`。
+
+规则：
+
+- 解析顺序：精确 ID → 自定义别名 → 内置别名 → 大小写无关匹配；**没有模糊匹配**
+- 全部失败 → `404`，错误信息里列出当前可用模型
+- 自定义别名的目标模型不在当前清单里时，该别名既不生效也不出现在 `/v1/models` 里
 
 ### 2.5 模型清单接口
 
-`GET /v1/models` 会在 `codearts` 扩展字段里带上通道与计费信息：
+`GET /v1/models` 会在 `codearts` 扩展字段里带上计费信息：
 
 ```json
 {"id":"glm-5.3","object":"model","owned_by":"codearts",
  "codearts":{"channel":"credit","credit":"0.79x","billable":true,
-             "name":"glm-5.3","context":0,"max_output":0,
-             "description":"面向复杂编程与长程任务"}}
+             "name":"GLM-5.3","context":0,"max_output":0,
+             "description":"【限时体验】面向复杂编程与长程任务"}}
 ```
+
+`channel` 恒为 `credit`（免费权益通道已下线），保留该字段只是为了兼容既有客户端。
 
 ---
 
@@ -311,7 +274,7 @@ CodeArts Agent 是 VS Code fork，登录会话存在 VS Code 的 secret storage 
 想手动确认能否读到凭据：
 
 ```bash
-go run ./cmd/probe              # 全量诊断：凭据 / 模型 / 额度 / 签到 / 对话探活
+go run ./cmd/probe              # 全量诊断：凭据 / 模型清单 / 活动福利（不消耗积分）
 go run ./cmd/probe -dump-keys   # 只列出 state.vscdb 里 ItemTable 的全部键名
 ```
 
@@ -478,11 +441,12 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 <http://127.0.0.1:10087/>，三个内嵌文件（HTML + CSS + JS）、无外部依赖、可离线使用。
 
-- **概览**：请求统计、今日免费额度进度条、今日签到 n/m、**活动福利列表与邀请链接**、模型清单（含通道与积分倍率）、一键刷新模型
-- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **签到** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日签到」状态
+- **概览**：请求统计、今日领取 n/m、**活动福利列表与邀请链接**、模型清单（含积分倍率）、一键刷新模型
+- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **领取活动福利** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日领取」状态
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` **仅允许本机直连**）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
-- **设置**：默认 / 强制模型、**允许积分模型开关**、**允许匿名调用开关**、**每日自动签到开关与时刻**、
+- **设置**：默认 / 强制模型、**允许真实消耗积分开关**、**允许匿名调用开关**、**按密钥限流开关与阈值**、
+  **活动福利自动领取开关与时刻**、
   **浏览器登录回调端口**、超时、重试、日志条数、CORS、续期开关、
   上游身份头、模型别名、管理密码（含「清除管理密码」按钮）
 
@@ -507,17 +471,16 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/admin/api/state` | 首屏状态（账号 / 密钥 / 模型 / 设置 / 统计 / 额度 / 今日签到） |
+| GET | `/admin/api/state` | 首屏状态（账号 / 密钥 / 模型 / 设置 / 统计 / 今日领取） |
 | POST | `/admin/api/accounts` | 账号操作：`import` / `manual` / **`export`** / `session-json` / `remove` / `toggle` / `clear-errors` / `reimport` |
 | GET/POST/DELETE | `/admin/api/keys` | API 密钥增删改查 |
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
-| POST | `/admin/api/checkin` | 账号连通性探活（永远走免费通道，不扣积分） |
-| POST | `/admin/api/claim` | **每日签到**：免费福利 Token + 活动福利积分（全部账号或指定 `id`） |
+| POST | `/admin/api/checkin` | 账号连通性探活（用默认模型发一次 `max_tokens=8`，消耗极少积分） |
+| POST | `/admin/api/claim` | **领取活动福利**：运营活动奖励（全部账号或指定 `id`；免费福利 Token 已随通道下线移除） |
 | GET | `/admin/api/welfare` | 运营活动清单与可领取状态 |
 | POST | `/admin/api/invite` | 生成专属邀请码与邀请链接（奖励仍需好友真实注册） |
 | POST | `/admin/api/models/refresh` | 从上游刷新模型清单 |
-| GET | `/admin/api/balance` | 查询免费额度余额 |
 | POST | `/admin/api/login/start` | **启动浏览器登录**，返回授权 URL + 回调地址 + SSH 隧道命令 |
 | POST | `/admin/api/login/callback` | **提交手工粘贴的回调 URL**（远端部署无隧道时用） |
 | POST | `/admin/api/login/poll` | 轮询登录状态，成功后自动入库 |
@@ -533,6 +496,7 @@ Anthropic 侧映射为 `thinking` 内容块。
 
 | 情况 | HTTP | OpenAI `error.type` | Anthropic `error.type` |
 | --- | --- | --- | --- |
+| **网关侧限流**（本机密钥打太快） | `429` | `rate_limit_error` | `rate_limit_error` |
 | 上游并发会话打满 / 429 限流 | `429` | `rate_limit_error` | `rate_limit_error` |
 | 请求参数或模型名不合法（含上游 `200 + error_code`） | `400` | `invalid_request_error` | `invalid_request_error` |
 | 模型不存在 | `404` | `invalid_request_error` | `invalid_request_error` |
@@ -542,6 +506,10 @@ Anthropic 侧映射为 `thinking` 内容块。
 
 > 上游把「并发会话数已达上限」表达为 `HTTP 400 + TM.00001041`，网关会先按
 > 临时性故障**退避重试**（不计入账号失败），重试仍失败才回 `429`。
+>
+> **网关侧限流与上游 429 是两件事**：前者是「这个密钥自己打得太快」，响应会带
+> `Retry-After`（网关能算准补满令牌的时间）；后者是「账号的并发会话满了」，只能等或换账号。
+> 被网关拦下的请求**不会**进入上游，因此不消耗积分。
 >
 > **账号登录态失效**是唯一需要人工介入的错误：网关会把上游的错误码
 > （`STS5.1806` / `invalid_grant` / `APIG.0301` …）翻译成一句人话，
@@ -565,10 +533,9 @@ CodeArts2API/
 │  │  ├─ session_other.go      # 非 Windows 降级
 │  │  ├─ sqlite.go             # 极简 SQLite 只读 + 定长原地写
 │  │  ├─ signer.go             # 华为云 SDK-HMAC-SHA256
-│  │  ├─ client.go             # inferhub 转发 / 模型 / 额度
+│  │  ├─ client.go             # inferhub 转发 / 模型清单 / 探活
 │  │  ├─ refresh.go            # DPoP(ES256 JWS) 续期
 │  │  ├─ login.go              # 本地浏览器登录（OAuth PKCE + 回调服务器）
-│  │  ├─ benefit.go            # 每日免费福利 Token 领取
 │  │  ├─ welfare.go            # 运营活动（每日积分 / 邀请码）
 │  │  ├─ sse.go                # SSE 聚合（流式→非流式兜底）+ 错误分类
 │  │  ├─ manager.go            # 凭据解析与续期编排
@@ -576,10 +543,11 @@ CodeArts2API/
 │  │  └─ debug.go              # state.vscdb 键名转储
 │  ├─ registry/          # 模型清单与别名解析
 │  ├─ protocol/          # Anthropic ↔ OpenAI 纯数据转换（可脱离网络单测）
+│  ├─ ratelimit/         # 按密钥的令牌桶 + 在飞并发闸门（自我保护限流）
 │  ├─ apierr/            # 内部错误 → 对外 HTTP 状态码 / OpenAI·Anthropic type
 │  ├─ server/            # OpenAI / Anthropic 兼容层 + 控制台
-│  │  ├─ chat.go  anthropic.go  models.go
-│  │  ├─ claim.go              # 每日自动签到调度
+│  │  ├─ chat.go  anthropic.go  models.go  model_resolve.go
+│  │  ├─ claim.go              # 每日自动领取活动福利调度
 │  │  ├─ login.go              # 浏览器登录 API
 │  │  ├─ metrics.go            # /metrics（Prometheus 文本，复用现有统计）
 │  │  ├─ admin.go  server.go  web.go
@@ -613,7 +581,7 @@ go build ./... && go vet ./... && go test ./...
 # 校验控制台 JS（跨行字符串 / node --check）与 CSS（括号配对 / 无外部资源）
 python tools/check_html_js.py
 
-# 本机诊断：凭据 / 模型 / 额度 / 活动福利 / 对话探活
+# 本机诊断：凭据 / 模型清单 / 活动福利（加 -model 才做对话探活，会消耗少量积分）
 go run ./cmd/probe
 
 # 并发竞态检查（需要 cgo；Windows 下注意下面的说明）
@@ -685,6 +653,9 @@ go test -race ./...
 - 管理密码不再写入 `localStorage`（明文落盘等价于「导出完整登录态」的权限），
   只在内存与当前标签页的 `sessionStorage` 中保存；历史版本残留的值会在启动时清除。
 - **CORS 默认只放行同源**（控制台自己的页面），不再默认放行任意 localhost 端口。
+- **按密钥限流默认开启**（QPS 5 / 突发 10 / 并发 8）：只做**自我保护**，
+  防止失控客户端（循环重试、Agent 死循环）烧光账号积分。被拦下的请求在调用上游前
+  就返回 `429`，**不消耗额度**；不承诺密钥之间的公平配额（见 `goal-and-requirements.md` 的非目标）。
   需要别的来源时在设置里显式列出，且不接受通配符。
 - 上游身份头里的 `x-ot-session-id` 按凭据推导并**复用**（不再每请求随机），
   否则会持续撞上游「每账号 3 个并发会话」的上限。

@@ -78,19 +78,6 @@
         <div class="card">
           <div class="card-head">
             <div>
-              <h2>今日额度</h2>
-              <p class="card-sub">benefit 免费权益通道 · 与 CodeArts Agent 共用同一份额度</p>
-            </div>
-            <div class="card-actions">
-              <button class="btn" id="refreshBalance">查询额度</button>
-            </div>
-          </div>
-          <div id="balance" class="muted">尚未查询。</div>
-        </div>
-
-        <div class="card">
-          <div class="card-head">
-            <div>
               <h2>活动福利</h2>
               <p class="card-sub">运营活动与可领取奖励</p>
             </div>
@@ -129,7 +116,7 @@
           <div class="card-head">
             <div>
               <h2>模型</h2>
-              <p class="card-sub">当前网关暴露的模型清单与计费通道</p>
+              <p class="card-sub">当前网关暴露的模型清单与积分倍率</p>
             </div>
             <div class="card-actions">
               <button class="btn" id="refreshModels">从上游刷新清单</button>
@@ -138,13 +125,13 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>ID</th><th>名称</th><th>通道</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
+              <thead><tr><th>ID</th><th>名称</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
               <tbody id="models"></tbody>
             </table>
           </div>
           <p class="hint">
-            <b>免费额度</b>通道计入每日免费 token 额度（与 CodeArts Agent 共用）；
-            <b>积分</b>通道按积分计费，会产生真实消耗。
+            <b>所有模型都按积分计费</b>，会产生真实消耗。免费权益通道已于 2026-10 下线，
+            无法识别的模型名会直接报 404（不会静默回落到其他模型）。
           </p>
         </div>
       </section>
@@ -160,7 +147,7 @@
               <button class="btn primary" id="importLocal">导入本机登录态</button>
               <button class="btn" id="browserLogin">浏览器登录</button>
               <button class="btn" id="checkinAll">全部探活</button>
-              <button class="btn" id="claimAll">立即签到</button>
+              <button class="btn" id="claimAll">领取活动福利</button>
             </div>
           </div>
 
@@ -233,7 +220,7 @@
 
           <div class="table-wrap">
             <table>
-              <thead><tr><th>名称</th><th>来源</th><th>AK</th><th>凭据有效期</th><th>状态</th><th>今日签到</th><th>失败</th><th>最近使用</th><th>操作</th></tr></thead>
+              <thead><tr><th>名称</th><th>来源</th><th>AK</th><th>凭据有效期</th><th>状态</th><th>今日领取</th><th>失败</th><th>最近使用</th><th>操作</th></tr></thead>
               <tbody id="accounts"></tbody>
             </table>
           </div>
@@ -412,11 +399,38 @@
           </div>
 
           <div class="settings-group">
-            <h3>计费与通道</h3>
+            <h3>限流</h3>
+            <label class="check" for="sRateLimit">
+              <input type="checkbox" id="sRateLimit">
+              <span>启用按密钥限流
+                <span class="check-hint">只做自我保护：防止失控客户端（循环重试、Agent 死循环）烧光账号积分，<strong>不</strong>承诺密钥之间的公平配额。超限返回 <code>429</code> + <code>Retry-After</code>，被拦下的请求不消耗额度。</span>
+              </span>
+            </label>
+            <div class="field-grid">
+              <div class="field">
+                <label for="sRateQPS">每密钥 QPS</label>
+                <input id="sRateQPS" type="number" min="1">
+                <span class="field-hint">长期允许的请求速率。</span>
+              </div>
+              <div class="field">
+                <label for="sRateBurst">突发上限</label>
+                <input id="sRateBurst" type="number" min="1">
+                <span class="field-hint">瞬时允许的请求数。</span>
+              </div>
+              <div class="field">
+                <label for="sRateConc">并发上限</label>
+                <input id="sRateConc" type="number" min="0">
+                <span class="field-hint">同一密钥的在飞请求数；0 = 不限。</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3>计费开关</h3>
             <label class="check" for="sAllowCredit">
               <input type="checkbox" id="sAllowCredit">
-              <span>允许调用积分（计费）通道的模型
-                <span class="check-hint">如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro。关闭后只放行免费权益通道；积分模型会在账号上产生真实消耗。</span>
+              <span>允许真实消耗积分
+                <span class="check-hint">免费权益通道已下线，所有模型都会计费。关闭它等于拒绝一切 <code>/v1/*</code> 模型调用（403），只在临时停服/排障时使用。</span>
               </span>
             </label>
           </div>
@@ -432,20 +446,20 @@
           </div>
 
           <div class="settings-group">
-            <h3>每日免费福利 Token 签到</h3>
+            <h3>活动福利自动领取</h3>
             <label class="check" for="sAutoClaim">
               <input type="checkbox" id="sAutoClaim">
-              <span>每天自动领取免费福利 Token</span>
+              <span>每天自动领取运营活动奖励</span>
             </label>
             <div class="row mt-12">
-              <span class="field-label">每日签到时刻</span>
-              <input class="w-hour" id="sClaimHour" type="number" min="0" max="23" aria-label="签到小时">
+              <span class="field-label">每日领取时刻</span>
+              <input class="w-hour" id="sClaimHour" type="number" min="0" max="23" aria-label="领取小时">
               <span class="sep muted">:</span>
-              <input class="w-hour" id="sClaimMinute" type="number" min="0" max="59" aria-label="签到分钟">
+              <input class="w-hour" id="sClaimMinute" type="number" min="0" max="59" aria-label="领取分钟">
             </div>
             <p class="hint">
-              福利 Token 当日 24:00 清零，所以默认 00:05 领。领取接口是幂等的，重复领不会报错。<br>
-              IDE 运行时它自己也会领；这里的自动签到是「IDE 没开 / 跨天 / 多账号」时的兜底。
+              运营活动的权益按自然日刷新，所以默认 00:05 领。领取接口是幂等的，重复领不会报错。<br>
+              只领服务端说能领的：邀请与学生认证类必须由真实事件触发。
             </p>
           </div>
 

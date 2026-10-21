@@ -6,6 +6,10 @@
 >
 > 对齐版本：CodeArts Agent **26.9.902**（`plugin-version` / `ide-version`），
 > 观测时间 2026-10。上游随时可能变更。
+>
+> **2026-10 变更**：免费权益（benefit）通道整体下线 —— `benefit-gateway-config`
+> 返回 `enabled:false`，`gateway/config`、`benefit/claim`、`user/tokens/balance`
+> 一律报 `4000: invalid channel, group not found`。本文件已按「只剩积分通道」重写。
 
 置信度标记：✅ 实测跑通　🔶 代码确认、未实跑　⚠️ 易变、可能随时失效
 
@@ -17,11 +21,11 @@
 | --- | --- | --- | --- |
 | 推理（OpenAI 兼容） | `POST /api/v2/chat/completions` | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ |
 | 备用域名 | 同上 | `https://snap-access.cn-north-4.myhuaweicloud.cn` | 🔶 |
-| benefit 模型清单 | `GET /api/v1/gateway/config` | `https://opengw.developer.huaweicloud.com` | ✅ |
-| 每日额度 | `GET /api/v1/user/tokens/balance` | 同上 | ✅ |
-| benefit 通道开关 | `GET /v1/benefit-gateway-config` | 同上 | ✅ |
-| 每日免费 Token 领取 | `GET /api/v1/benefit/claim`（幂等） | 同上 | ✅ |
-| 订阅/企业内置模型 | `GET /v1/model/builtin`（需 `Agent-Type: PromptCenter`） | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ |
+| benefit 模型清单 | `GET /api/v1/gateway/config` | `https://opengw.developer.huaweicloud.com` | ❌ 已下线（`4000: invalid channel, group not found`） |
+| 每日额度 | `GET /api/v1/user/tokens/balance` | 同上 | ❌ 已下线（同上） |
+| benefit 通道开关 | `GET /v1/benefit-gateway-config` | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ 返回 `{"enabled":false}` |
+| 每日免费 Token 领取 | `GET /api/v1/benefit/claim`（幂等） | `https://opengw.developer.huaweicloud.com` | ❌ 已下线（同上） |
+| 可用模型清单 | `GET /v1/model/builtin`（需 `Agent-Type: PromptCenter`） | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ |
 | 运营活动清单 | `GET /v1/ops/delivery`（需 `Agent-Type: PromptCenter`） | 同上 | ✅ |
 | 运营活动领取 | `POST /v1/ops/claim`（幂等，带 `idempotentKey`） | 同上 | ✅ |
 | 邀请码生成 | `POST /v1/ops/invite/generate` | 同上 | ✅ |
@@ -52,7 +56,7 @@ OAuth 客户端标识：`client_id = codearts-agent`（= 客户端 `product.json
 | `user-msg-id` | `msg_<random>` | 消息标识 |
 | `created-time` | UTC ISO8601 | 请求时间 |
 | `model-id` / `model-name` | 模型名 | **必须与请求体 `model` 完全一致**，见 §7 |
-| `maas_type` | `benefit` 或省略 | 通道开关，见 §3 |
+| `maas_type` | **不再发送** | 免费权益通道已下线，见 §3 |
 | `X-Security-token` | STS token | 仅临时凭据时携带 |
 | `Authorization` | `SDK-HMAC-SHA256 ...` | 见 §4 |
 
@@ -61,18 +65,27 @@ OAuth 客户端标识：`client_id = codearts-agent`（= 客户端 `product.json
 
 ---
 
-## 3. 两条通道：`maas_type` 决定路由与计费
+## 3. 通道：只剩积分（credit）
 
 | 通道 | 请求头 | 计费 | 模型清单来源 | 典型模型 |
 | --- | --- | --- | --- | --- |
-| **benefit** | `maas_type: benefit` | 消耗每日福利 Token（1000 万/日，24:00 清零） | `/api/v1/gateway/config` | `glm-5.3-flash`、`deepseek-v4-flash-0731`、`deepseek-v4-pro-0813`、`deepseek-v4.1-flash` |
-| **credit** | **不带** `maas_type` | 按积分计费（真实消耗） | `/v1/model/builtin` | `glm-5.3`、`GLM-5.2`、`openpangu-2.0-pro` … |
+| **credit** | **不带** `maas_type` | 按积分计费（真实消耗） | `/v1/model/builtin` | `glm-5.3`、`GLM-5.2`、`openpangu-2.0-pro`、`deepseek-v4.1-flash` … |
+| benefit（已下线） | `maas_type: benefit` | 曾消耗每日福利 Token | `/api/v1/gateway/config` | `glm-5.3-flash`、`deepseek-v4-flash-0731`、`deepseek-v4-pro-0813`、`deepseek-v4.1-flash` |
 | education / examination | `maas_type: education` 等 | — | — | 需学生认证 / 考试资格，普通账号 403 |
 
-**关键约束：两条通道互不相通。** 福利 Token 用尽后 benefit 模型不可再用，
-且**无法识别的模型名必须默认落到 benefit 通道** —— 宁可让上游报 `4005`，
-也不能静默切到积分通道扣费。网关的 `registry` 与 `settings.allow_credit_models`
-就是为这条约束服务的。
+**2026-10 实测（benefit 通道关闭后）**：
+
+```text
+GET /v1/benefit-gateway-config        -> 200 {"enabled":false,"is_examination_domain":false}
+GET /api/v1/gateway/config            -> 200 {"error_code":"4000","error_msg":"invalid channel, group not found"}
+GET /api/v1/benefit/claim             -> 200 {"error_code":"4000","error_msg":"invalid channel, group not found"}
+GET /api/v1/user/tokens/balance       -> 200 {"error_code":"4000","error_msg":"invalid channel, group not found"}
+GET /v1/model/builtin                 -> 200（8 个模型，全部 enable:true）
+```
+
+**因此网关不再发送 `maas_type`**，也不再保留 benefit 通道的模型清单 / 额度 / 领取逻辑。
+原来那条「无法识别的模型名必须落到 benefit 通道」的约束随之失效 ——
+现在**无法识别的模型名直接报 404**，绝不静默换成别的模型扣费。
 
 ---
 
@@ -184,8 +197,10 @@ body.model = "glm-5.3 "（尾随空格）
 
 ### 7.4 领取类接口是幂等的
 
-`/api/v1/benefit/claim` 当天重复调用仍返回 `0000 success`，额度不变。
-因此「每日自动签到」可以放心按本地日期轮询，重复执行无副作用。
+`/v1/ops/claim` 重复调用不会重复发放（带 `idempotentKey`，服务端按 campaign 去重）。
+因此「每日自动领取活动福利」可以放心按本地日期轮询，重复执行无副作用。
+
+（原 `/api/v1/benefit/claim` 已随 benefit 通道下线，见 §3。）
 
 ---
 

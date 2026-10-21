@@ -10,6 +10,7 @@ import (
 
 	"codearts2api/internal/apierr"
 	"codearts2api/internal/codearts"
+	"codearts2api/internal/ratelimit"
 	"codearts2api/internal/registry"
 	"codearts2api/internal/store"
 )
@@ -21,7 +22,12 @@ func newTestServer(t *testing.T, accounts int, retries int) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.UpdateSettings(func(s *store.Settings) { s.MaxRetries = retries })
+	st.UpdateSettings(func(s *store.Settings) {
+		s.MaxRetries = retries
+		// 这个 helper 的用例关心的是重试序列，不是限流；默认关掉以免
+		// 「连发多个请求」的用例被 429 干扰。限流自己的测试单独建服务。
+		s.RateLimitEnabled = false
+	})
 	for i := 0; i < accounts; i++ {
 		st.UpsertAccount(&codearts.Account{
 			ID:      string(rune('a' + i)),
@@ -31,7 +37,8 @@ func newTestServer(t *testing.T, accounts int, retries int) *Server {
 			Session: &codearts.Session{AccessKey: "ak", SecretKey: "sk"},
 		})
 	}
-	return &Server{Store: st, Up: codearts.NewClient(), Reg: registry.New()}
+	return &Server{Store: st, Up: codearts.NewClient(), Reg: registry.New(),
+		Limits: ratelimit.New(rateLimitConfig(st.Settings()), nil)}
 }
 
 // transientErr 模拟上游「每账号 3 个并发会话」打满。

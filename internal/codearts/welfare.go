@@ -127,7 +127,7 @@ type welfareEnvelope struct {
 
 // opsHeaders 是 ops 接口需要的请求头。
 func (c *Client) opsHeaders(sess *Session) map[string]string {
-	h := c.baseHeaders(sess, "", ChannelCredit)
+	h := c.baseHeaders(sess, "")
 	h["Agent-Type"] = "PromptCenter"
 	return h
 }
@@ -289,6 +289,27 @@ func (c *Client) GenerateInviteCode(ctx context.Context, sess *Session, campaign
 		return nil, fmt.Errorf("邀请码解析失败: %w", err)
 	}
 	return &code, nil
+}
+
+// DescribeClaimError 把领取类接口的错误翻译成一句人话。
+func DescribeClaimError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "APIG.0602"):
+		return "凭据（STS security token）已过期，请重新登录"
+	case strings.Contains(msg, "APIG.0301"), strings.Contains(msg, "APIG.0303"):
+		return "签名校验失败，凭据可能已失效"
+	case strings.Contains(msg, "4006"):
+		return "今日名额已用完"
+	case strings.Contains(msg, "4004"):
+		return "权益不存在或已过期"
+	case strings.Contains(msg, "4003"):
+		return "账号已被禁用"
+	}
+	return msg
 }
 
 // DescribeWelfareError 把领取错误翻译成一句人话。

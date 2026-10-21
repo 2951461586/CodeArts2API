@@ -20,8 +20,6 @@ const (
 	SnapHost = "https://snap-access.cn-north-4.myhuaweicloud.com"
 	// SnapHostBackup 是备用域名（.cn 后缀，与主域名等价）。
 	SnapHostBackup = "https://snap-access.cn-north-4.myhuaweicloud.cn"
-	// BenefitHost 提供免费权益（benefit 通道）的模型清单与额度。
-	BenefitHost = "https://opengw.developer.huaweicloud.com"
 	// IAMTokenURL 是 STS / IAM 令牌端点（登录与续期）。
 	IAMTokenURL = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens"
 	// ClientID 是 OAuth 客户端标识（= product.json 的 urlProtocol）。
@@ -29,16 +27,8 @@ const (
 
 	// ChatPath 是 OpenAI 兼容的推理入口。
 	ChatPath = "/api/v2/chat/completions"
-	// GatewayConfigPath 返回 benefit 通道的可用模型与 base_url。
-	GatewayConfigPath = "/api/v1/gateway/config"
-	// BalancePath 返回每日 / 每月 token 额度。
-	BalancePath = "/api/v1/user/tokens/balance"
-	// BuiltinModelsPath 返回订阅 / 企业内置模型（需 Agent-Type: PromptCenter）。
+	// BuiltinModelsPath 返回可用模型清单（需 Agent-Type: PromptCenter）。
 	BuiltinModelsPath = "/v1/model/builtin"
-	// BenefitGatewayConfigPath 报告 benefit 通道是否开放。
-	BenefitGatewayConfigPath = "/v1/benefit-gateway-config"
-	// BenefitClaimPath 是每日免费福利 Token 的领取入口（幂等 GET）。
-	BenefitClaimPath = "/api/v1/benefit/claim"
 	// 运营活动（「活动福利」）相关入口，都需要 Agent-Type: PromptCenter。
 	//
 	// WelfareDeliveryPath 列出活动与可领取状态；
@@ -55,22 +45,19 @@ const (
 	IDEName       = "VSCode"
 	IDEVersion    = "26.9.902"
 	AppID         = "CodeAgent3.0"
+
+	// DefaultModel 是未指定模型时的默认上游模型。
+	//
+	// 2026-10 实测的可用清单里，glm-5.3 是通用文本模型的默认选择（积分倍率 0.79x）。
+	DefaultModel = "glm-5.3"
 )
 
-// Channel 是上游的路由通道。
+// 上游通道：只剩积分（计费）通道。
 //
-// 实测（2026-10）：CodeArts inferhub 用请求头 maas_type 区分两条通道 ——
-// 同一个模型名在不同通道下是否可用、是否计费都不同。
-type Channel string
-
-const (
-	// ChannelBenefit 走每日免费权益额度：请求头带 `maas_type: benefit`。
-	// 额度见 /api/v1/user/tokens/balance 的 daily_token_limit。
-	ChannelBenefit Channel = "benefit"
-	// ChannelCredit 走订阅 / 积分通道：**不带** maas_type 头，按积分计费。
-	// 例如 GLM-5.3 / GLM-5.2 / openpangu-2.0-pro 都属于这一类。
-	ChannelCredit Channel = "credit"
-)
+// 2026-10 起，免费权益（benefit）通道整体下线 —— `benefit-gateway-config`
+// 返回 `enabled:false`，`gateway/config`、`benefit/claim`、`user/tokens/balance`
+// 一律报 `4000: invalid channel, group not found`。因此请求头不再写
+// `maas_type`，所有模型都按积分计费。
 
 // Client 是 CodeArts 上游 HTTP 客户端。
 type Client struct {
@@ -127,12 +114,9 @@ func NewClient() *Client {
 
 // baseHeaders 构造一次请求的公共头（含身份头与 tracing 头）。
 //
-// channel 决定是否带 `maas_type: benefit`：benefit 走免费权益额度，
-// credit 不带该头从而落到积分通道。
-//
 // sess 用于推导**稳定的**上游会话 ID：上游按 x-ot-session-id 统计并发会话
 // （每账号上限 3 个），每个请求都换新 ID 会迅速打满上限。
-func (c *Client) baseHeaders(sess *Session, model string, channel Channel) map[string]string {
+func (c *Client) baseHeaders(sess *Session, model string) map[string]string {
 	id := c.Identity
 	if id.PluginName == "" {
 		id = DefaultIdentity()
@@ -166,9 +150,6 @@ func (c *Client) baseHeaders(sess *Session, model string, channel Channel) map[s
 	}
 	if id.Language != "" {
 		h["X-Language"] = id.Language
-	}
-	if channel == ChannelBenefit {
-		h["maas_type"] = string(ChannelBenefit)
 	}
 	if model != "" {
 		// 上游会校验 model-id 与请求体里的 model 完全一致（不一致报 406），
@@ -225,99 +206,7 @@ func hostCandidates(host string) []string {
 	return []string{host}
 }
 
-// GatewayConfig 是 benefit 通道的模型清单。
-type GatewayConfig struct {
-	BaseURL string         `json:"base_url"`
-	Models  []GatewayModel `json:"models"`
-}
-
-// GatewayModel 是 benefit 通道里的一个模型。
-type GatewayModel struct {
-	ModelID       string `json:"model_id"`
-	ModelName     string `json:"model_name"`
-	ContextWindow int    `json:"context_window"`
-	MaxTokens     int    `json:"max_tokens"`
-	Sort          int    `json:"sort"`
-}
-
-// gatewayEnvelope 是 benefit 接口的统一信封。
-type gatewayEnvelope struct {
-	ErrorCode string          `json:"error_code"`
-	ErrorMsg  string          `json:"error_msg"`
-	Result    json.RawMessage `json:"result"`
-}
-
-// FetchGatewayConfig 拉取 benefit 通道可用模型。
-func (c *Client) FetchGatewayConfig(ctx context.Context, sess *Session) (*GatewayConfig, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, GatewayConfigPath, nil, c.baseHeaders(sess, "", ChannelCredit))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("获取模型列表失败 HTTP %d: %s", resp.StatusCode, truncate(string(raw), 300))
-	}
-	var env gatewayEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("模型列表解析失败: %w", err)
-	}
-	if env.ErrorCode != "" && env.ErrorCode != "0000" {
-		return nil, fmt.Errorf("获取模型列表失败 %s: %s", env.ErrorCode, env.ErrorMsg)
-	}
-	var cfg GatewayConfig
-	if err := json.Unmarshal(env.Result, &cfg); err != nil {
-		return nil, fmt.Errorf("模型列表解析失败: %w", err)
-	}
-	return &cfg, nil
-}
-
-// TokensBalance 是每日 / 每月 token 额度。
-type TokensBalance struct {
-	Channel           string `json:"channel"`
-	DailyTokenLimit   int64  `json:"daily_token_limit"`
-	DailyTokensUsed   int64  `json:"daily_tokens_used"`
-	MonthlyTokenLimit int64  `json:"monthly_token_limit"`
-	MonthlyTokensUsed int64  `json:"monthly_tokens_used"`
-	TotalBalance      int64  `json:"total_balance"`
-	TotalQuota        int64  `json:"total_quota"`
-	UsedAmount        int64  `json:"used_amount"`
-	UpdateTime        int64  `json:"update_time"`
-	ExpireTime        int64  `json:"expire_time"`
-}
-
-// FetchBalance 查询额度余额。
-func (c *Client) FetchBalance(ctx context.Context, sess *Session) (*TokensBalance, error) {
-	resp, err := c.do(ctx, sess, http.MethodGet, BenefitHost, BalancePath, nil, c.baseHeaders(sess, "", ChannelCredit))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("查询额度失败 HTTP %d: %s", resp.StatusCode, truncate(string(raw), 300))
-	}
-	var env gatewayEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("额度解析失败: %w", err)
-	}
-	if env.ErrorCode != "" && env.ErrorCode != "0000" {
-		return nil, fmt.Errorf("查询额度失败 %s: %s", env.ErrorCode, env.ErrorMsg)
-	}
-	var bal TokensBalance
-	if err := json.Unmarshal(env.Result, &bal); err != nil {
-		return nil, fmt.Errorf("额度解析失败: %w", err)
-	}
-	return &bal, nil
-}
-
-// BuiltinModel 是订阅 / 企业内置模型。
+// BuiltinModel 是上游返回的可用模型。
 //
 // 这些模型走**积分（计费）通道** —— 请求时不带 maas_type 头，按积分计费。
 type BuiltinModel struct {
@@ -328,7 +217,6 @@ type BuiltinModel struct {
 	Enable         bool         `json:"enable"`
 	DisplayEnabled bool         `json:"display_enabled"`
 	SupportsImages bool         `json:"supports_images"`
-	ChannelSource  string       `json:"channel_source"`
 	Credit         []CreditTier `json:"credit"`
 }
 
@@ -360,7 +248,7 @@ func (m BuiltinModel) IsBillable() bool { return len(m.Credit) > 0 }
 
 // FetchBuiltinModels 拉取内置模型清单（需要 Agent-Type: PromptCenter）。
 func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]BuiltinModel, error) {
-	h := c.baseHeaders(sess, "", ChannelCredit)
+	h := c.baseHeaders(sess, "")
 	h["Agent-Type"] = "PromptCenter"
 	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, BuiltinModelsPath, nil, h)
 	if err != nil {
@@ -388,8 +276,8 @@ func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]Built
 //
 // 上游返回标准 OpenAI SSE（data: {chat.completion.chunk}），
 // 因此这里只做「拆包 + 错误识别」，不做任何协议转换。
-func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, channel Channel, body []byte, onChunk func([]byte) error) error {
-	h := c.baseHeaders(sess, model, channel)
+func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, body []byte, onChunk func([]byte) error) error {
+	h := c.baseHeaders(sess, model)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return err
@@ -426,8 +314,8 @@ func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, ch
 }
 
 // Chat 向 inferhub 发起非流式对话，返回原始响应体。
-func (c *Client) Chat(ctx context.Context, sess *Session, model string, channel Channel, body []byte) ([]byte, error) {
-	h := c.baseHeaders(sess, model, channel)
+func (c *Client) Chat(ctx context.Context, sess *Session, model string, body []byte) ([]byte, error) {
+	h := c.baseHeaders(sess, model)
 	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
 	if err != nil {
 		return nil, err
@@ -456,14 +344,10 @@ func (e *UpstreamError) Error() string {
 
 // Probe 用一个最小请求探测凭据是否可用。
 //
-// 默认走免费权益通道，避免探活本身消耗积分。
-func (c *Client) Probe(ctx context.Context, sess *Session, model string, channel Channel) error {
+// 会消耗极少量积分（max_tokens=8），调用方应在 UI 上提示。
+func (c *Client) Probe(ctx context.Context, sess *Session, model string) error {
 	if model == "" {
-		model = "glm-5.3-flash"
-		channel = ChannelBenefit
-	}
-	if channel == "" {
-		channel = ChannelBenefit
+		model = DefaultModel
 	}
 	body, err := json.Marshal(map[string]any{
 		"model":      model,
@@ -474,7 +358,7 @@ func (c *Client) Probe(ctx context.Context, sess *Session, model string, channel
 	if err != nil {
 		return err
 	}
-	raw, err := c.Chat(ctx, sess, model, channel, body)
+	raw, err := c.Chat(ctx, sess, model, body)
 	if err != nil {
 		return err
 	}

@@ -10,13 +10,59 @@ package apierr
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
+	"strings"
+	"time"
 
 	"codearts2api/internal/codearts"
 )
 
 // NoAccount 表示账号池为空（需要用户先去控制台导入 / 登录）。
 var NoAccount = errors.New("没有可用账号，请先在控制台「导入本机桌面端」或在 CodeArts Agent 里登录")
+
+// ModelNotFound 表示请求的模型名既不在上游清单里，也不是已知别名。
+//
+// 免费权益通道下线后每个模型都真实扣积分，因此**不能**像以前那样
+// 静默回落到某个默认模型 —— 猜错模型等于替用户乱花钱。
+type ModelNotFound struct {
+	// Name 是客户端请求的模型名（可能为空：请求体里没写 model）。
+	Name string
+	// Available 是当前可用的模型 ID 列表，用于拼出可操作的提示。
+	Available []string
+}
+
+// Error 实现 error。
+func (e *ModelNotFound) Error() string {
+	if e.Name == "" {
+		return "请求未指定 model，且没有配置默认模型"
+	}
+	msg := "模型 " + e.Name + " 不存在"
+	if len(e.Available) > 0 {
+		msg += "；可用模型：" + strings.Join(e.Available, ", ")
+	}
+	return msg
+}
+
+// RateLimited 表示**网关侧**的限流拦截。
+//
+// 必须与上游 429 区分开：上游 429 是「账号的并发会话满了，换个时机或换个账号再试」，
+// 网关侧限流是「这个密钥自己打得太快」。两者对外状态码相同，但语义与退避时长不同 ——
+// 这里的 RetryAfter 是网关能算准的，上游给不了。
+type RateLimited struct {
+	// RetryAfter 是建议客户端等待的时长，恒大于 0。
+	RetryAfter time.Duration
+}
+
+// Error 实现 error。
+func (e *RateLimited) Error() string {
+	secs := int(math.Ceil(e.RetryAfter.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return fmt.Sprintf("请求过于频繁：该密钥已触发网关限流，请在 %d 秒后重试", secs)
+}
 
 // Error 是一次失败的对外表述。
 type Error struct {
@@ -35,6 +81,7 @@ type Error struct {
 //	情况                        状态码  OpenAI type            Anthropic type
 //	账号池为空                   503     server_error         overloaded_error
 //	凭据失效（无法续期）          502     credentials_error    authentication_error
+//	网关侧限流（本机密钥打太快）   429     rate_limit_error     rate_limit_error
 //	上游并发上限 / 429           429     rate_limit_error     rate_limit_error
 //	参数或模型名不合法            400     invalid_request_error invalid_request_error
 //	模型不存在                   404     invalid_request_error invalid_request_error
@@ -48,6 +95,14 @@ func From(err error) Error {
 	}
 	if errors.Is(err, NoAccount) {
 		return Error{Status: http.StatusServiceUnavailable, OpenAI: "server_error", Anthropic: "overloaded_error"}
+	}
+	var mnf *ModelNotFound
+	if errors.As(err, &mnf) {
+		return Error{Status: http.StatusNotFound, OpenAI: "invalid_request_error", Anthropic: "invalid_request_error"}
+	}
+	var rl *RateLimited
+	if errors.As(err, &rl) {
+		return Error{Status: http.StatusTooManyRequests, OpenAI: "rate_limit_error", Anthropic: "rate_limit_error"}
 	}
 
 	var ue *codearts.UpstreamError

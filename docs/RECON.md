@@ -8,6 +8,11 @@
 
 > **本报告已被实现。** 对应代码见仓库根目录的 `internal/codearts/`（凭据 / 签名 / 转发 / 续期）
 > 与 `internal/server/`（OpenAI + Anthropic 兼容层与控制台）；使用方式见 `README.md`。
+>
+> ⚠️ **本文件是 2026-10 之前的快照，其中的 benefit（免费权益）通道内容已失效。**
+> 上游 `benefit-gateway-config` 现已返回 `enabled:false`，`gateway/config`、
+> `benefit/claim`、`user/tokens/balance` 一律报 `4000: invalid channel, group not found`。
+> 现状以 [`UPSTREAM.md`](UPSTREAM.md) 与代码为准。
 
 ---
 

@@ -248,7 +248,7 @@ type Account struct {
 	LastErr  string `json:"last_err,omitempty"`
 	LastUsed int64  `json:"last_used"`
 	Note     string `json:"note,omitempty"`
-	// 每日免费福利 Token 的签到记录（按本地日期去重）
+	// 每日运营活动福利的领取记录（按本地日期去重）
 	LastClaimDate string `json:"last_claim_date,omitempty"`
 	LastClaimAt   int64  `json:"last_claim_at,omitempty"`
 	LastClaimErr  string `json:"last_claim_err,omitempty"`

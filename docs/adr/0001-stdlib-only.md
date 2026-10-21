@@ -1,3 +1,11 @@
+---
+id: adr-0001
+type: architecture-design
+title: "ADR 0001：只依赖 Go 标准库"
+status: active
+parent: architecture
+---
+
 # ADR 0001：只依赖 Go 标准库
 
 - 状态：已采纳

@@ -101,7 +101,7 @@ func main() {
 	srv := server.New(st)
 	srv.ApplyIdentity()
 
-	// 后台每日自动签到（领取免费福利 Token）
+	// 后台每日自动领取运营活动福利
 	claimCtx, stopClaim := context.WithCancel(context.Background())
 	defer stopClaim()
 	srv.StartClaimLoop(claimCtx)

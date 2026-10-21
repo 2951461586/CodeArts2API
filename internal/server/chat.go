@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"codearts2api/internal/apierr"
@@ -54,17 +53,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := s.Store.Settings()
-	modelName := strings.TrimSpace(req.Model)
-	if settings.ForceModel != "" {
-		modelName = settings.ForceModel
+	model, err := s.resolveModel(settings, req.Model)
+	if err != nil {
+		writeErr(w, apierr.From(err).Status, err.Error(), "invalid_request_error")
+		return
 	}
-	if modelName == "" {
-		modelName = settings.DefaultModel
-	}
-	model := s.Reg.Resolve(modelName, settings.ModelAliases)
-	if model.IsCredit() && !settings.AllowCreditModels {
+	if !settings.AllowCreditModels {
 		writeErr(w, http.StatusForbidden,
-			"模型 "+model.ID+" 走积分（计费）通道，当前已在控制台关闭。如需使用请开启「允许积分模型」。",
+			"模型 "+model.ID+" 会真实消耗积分，当前已在控制台关闭。如需使用请开启「允许计费模型」。",
 			"invalid_request_error")
 		return
 	}
@@ -200,7 +196,7 @@ func (s *Server) chatOnce(ctx context.Context, acct *codearts.Account, model reg
 		return s.aggregateViaStream(ctx, sess, model, body)
 	}
 
-	raw, err := s.Up.Chat(ctx, sess, model.ID, model.Channel, body)
+	raw, err := s.Up.Chat(ctx, sess, model.ID, body)
 	if err != nil {
 		if codearts.IsEmptyRejection(err) {
 			s.Reg.MarkStreamOnly(model.ID)
@@ -225,7 +221,7 @@ func (s *Server) aggregateViaStream(ctx context.Context, sess *codearts.Session,
 		return nil, err
 	}
 	var chunks [][]byte
-	err = s.Up.ChatStream(ctx, sess, model.ID, model.Channel, streamBody, func(chunk []byte) error {
+	err = s.Up.ChatStream(ctx, sess, model.ID, streamBody, func(chunk []byte) error {
 		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
 			return codearts.UpstreamBusinessError(msg)
 		}
@@ -244,7 +240,7 @@ func (s *Server) streamOnce(ctx context.Context, acct *codearts.Account, model r
 	if err != nil {
 		return err
 	}
-	return s.Up.ChatStream(ctx, sess, model.ID, model.Channel, body, func(chunk []byte) error {
+	return s.Up.ChatStream(ctx, sess, model.ID, body, func(chunk []byte) error {
 		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
 			return codearts.UpstreamBusinessError(msg)
 		}

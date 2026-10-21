@@ -1,12 +1,12 @@
 // Command probe 是本机诊断工具：检查 CodeArts Agent 凭据是否可读、
-// 上游两条通道（免费权益 / 积分）是否可达、模型清单与额度是否正常。
+// 上游是否可达、可用模型清单与运营活动是否正常。
 //
 // 用法:
 //
-//	go run ./cmd/probe                        # 全量诊断（默认探活免费通道）
+//	go run ./cmd/probe                        # 全量诊断（凭据 / 模型清单 / 运营活动，不消耗积分）
 //	go run ./cmd/probe -user-data <dir>       # 指定 User Data 目录
 //	go run ./cmd/probe -dump-keys             # 只列出 state.vscdb 中 ItemTable 的键名
-//	go run ./cmd/probe -model GLM-5.2         # 探活指定模型（自动判断通道）
+//	go run ./cmd/probe -model glm-5.3         # 额外做对话探活（会消耗少量积分）
 package main
 
 import (
@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"codearts2api/internal/codearts"
@@ -25,7 +24,7 @@ func main() {
 	var (
 		userData = flag.String("user-data", "", "CodeArts Agent 的 User Data 目录")
 		dumpKeys = flag.Bool("dump-keys", false, "只列出 state.vscdb 中 ItemTable 的键名")
-		model    = flag.String("model", "glm-5.3-flash", "探活使用的模型（留空则跳过对话探活）")
+		model    = flag.String("model", "", "探活使用的模型（留空则跳过对话探活；探活会消耗少量积分）")
 	)
 	flag.Parse()
 
@@ -53,20 +52,15 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	benefit := showBenefit(ctx, client, sess)
 	showBuiltin(ctx, client, sess)
-	showBalance(ctx, client, sess)
 	showWelfare(ctx, client, sess)
 
 	if *model == "" {
 		return
 	}
-	ch := channelFor(benefit, *model)
-	fmt.Printf("\n== 对话探活（%s，通道 %s）==\n", *model, ch)
-	if ch == codearts.ChannelCredit {
-		fmt.Println("  注意：积分通道会消耗账号积分")
-	}
-	if err := client.Probe(ctx, sess, *model, ch); err != nil {
+	fmt.Printf("\n== 对话探活（%s）==\n", *model)
+	fmt.Println("  注意：免费权益通道已下线，探活会消耗极少量积分（max_tokens=8）")
+	if err := client.Probe(ctx, sess, *model); err != nil {
 		fmt.Println("  失败:", err)
 	} else {
 		fmt.Println("  OK")
@@ -99,23 +93,7 @@ func readAny(dirs []string) *codearts.Session {
 	return nil
 }
 
-// showBenefit 列出免费权益通道的模型。
-func showBenefit(ctx context.Context, c *codearts.Client, sess *codearts.Session) []codearts.GatewayModel {
-	fmt.Println("\n== benefit 通道（免费额度，请求头带 maas_type: benefit）==")
-	cfg, err := c.FetchGatewayConfig(ctx, sess)
-	if err != nil {
-		fmt.Println("  失败:", err)
-		return nil
-	}
-	fmt.Println("  base_url:", cfg.BaseURL)
-	for _, m := range cfg.Models {
-		fmt.Printf("  - %-26s ctx=%-9d max=%-8d sort=%d\n",
-			m.ModelID, m.ContextWindow, m.MaxTokens, m.Sort)
-	}
-	return cfg.Models
-}
-
-// showBuiltin 列出积分通道的内置模型。
+// showBuiltin 列出可用模型清单（积分通道）。
 func showBuiltin(ctx context.Context, c *codearts.Client, sess *codearts.Session) {
 	fmt.Println("\n== 内置模型清单（积分通道，请求头不带 maas_type）==")
 	list, err := c.FetchBuiltinModels(ctx, sess)
@@ -131,18 +109,6 @@ func showBuiltin(ctx context.Context, c *codearts.Client, sess *codearts.Session
 		fmt.Printf("  - %-24s %-10s enable=%-5v display=%-5v img=%-5v 积分倍率=%s\n",
 			m.ModelID, m.ModelCategory, m.Enable, m.DisplayEnabled, m.SupportsImages, credit)
 	}
-}
-
-// showBalance 展示免费权益额度。
-func showBalance(ctx context.Context, c *codearts.Client, sess *codearts.Session) {
-	fmt.Println("\n== 免费权益额度 ==")
-	bal, err := c.FetchBalance(ctx, sess)
-	if err != nil {
-		fmt.Println("  失败:", err)
-		return
-	}
-	fmt.Printf("  通道 %s：今日 %d / %d，剩余 %d\n",
-		bal.Channel, bal.DailyTokensUsed, bal.DailyTokenLimit, bal.TotalBalance)
 }
 
 // showWelfare 列出运营活动（「活动福利」）及可领取状态。
@@ -175,15 +141,4 @@ func cut10(s string) string {
 		return s[:10]
 	}
 	return s
-}
-
-// channelFor 判断某模型名该走哪条通道：
-// 出现在 benefit 清单里的走免费额度，其余（如 GLM-5.3 / GLM-5.2）走积分通道。
-func channelFor(benefit []codearts.GatewayModel, model string) codearts.Channel {
-	for _, m := range benefit {
-		if strings.EqualFold(m.ModelID, model) {
-			return codearts.ChannelBenefit
-		}
-	}
-	return codearts.ChannelCredit
 }

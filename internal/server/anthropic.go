@@ -47,17 +47,14 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	settings := s.Store.Settings()
-	modelName := strings.TrimSpace(req.Model)
-	if settings.ForceModel != "" {
-		modelName = settings.ForceModel
+	model, err := s.resolveModel(settings, req.Model)
+	if err != nil {
+		writeAnthropicErr(w, apierr.From(err).Status, "invalid_request_error", err.Error())
+		return
 	}
-	if modelName == "" {
-		modelName = settings.DefaultModel
-	}
-	model := s.Reg.Resolve(modelName, settings.ModelAliases)
-	if model.IsCredit() && !settings.AllowCreditModels {
+	if !settings.AllowCreditModels {
 		writeAnthropicErr(w, http.StatusForbidden, "invalid_request_error",
-			"模型 "+model.ID+" 走积分（计费）通道，当前已在控制台关闭。如需使用请开启「允许积分模型」。")
+			"模型 "+model.ID+" 会真实消耗积分，当前已在控制台关闭。如需使用请开启「允许计费模型」。")
 		return
 	}
 

@@ -36,18 +36,31 @@ type Settings struct {
 
 	// AutoRefresh 允许在凭据过期且 IDE 未续期时自行用 refresh_token 续期。
 	AutoRefresh bool `json:"auto_refresh"`
-	// AllowCreditModels 允许调用走积分（计费）通道的模型，如 GLM-5.3。
-	// 关闭后只放行免费权益通道的模型。
+	// AllowCreditModels 允许调用真实消耗积分的模型。
+	// 免费权益通道已于 2026-10 下线，现在**所有**模型都计费，
+	// 因此关闭它等于拒绝一切上游调用（默认开启）。
 	AllowCreditModels bool `json:"allow_credit_models"`
 	// AllowAnonymous 允许在尚未签发任何 API 密钥时，从非本机来源匿名调用 /v1/*。
 	//
 	// 默认关闭：没密钥时只放行本机直连。置真等于把账号额度开放给能访问到
 	// 这个端口的所有人，仅在你确定端口没有对外暴露时才开启。
 	AllowAnonymous bool `json:"allow_anonymous"`
-	// AutoClaim 每天自动领取免费福利 Token（幂等，重复领不报错）。
+
+	// RateLimitEnabled 开启按密钥的自我保护型限流。
+	//
+	// 定位见 goal 的「非目标」：只防止失控客户端烧光积分，
+	// **不**承诺密钥之间的公平配额。默认开启。
+	RateLimitEnabled bool `json:"rate_limit_enabled"`
+	// RateLimitQPS 是每个密钥长期允许的请求速率（令牌桶补充速率）。
+	RateLimitQPS int `json:"rate_limit_qps"`
+	// RateLimitBurst 是每个密钥允许的瞬时突发请求数（桶容量）。
+	RateLimitBurst int `json:"rate_limit_burst"`
+	// RateLimitConcurrency 是每个密钥允许的在飞请求上限；<= 0 表示不限。
+	RateLimitConcurrency int `json:"rate_limit_concurrency"`
+	// AutoClaim 每天自动领取运营活动福利（幂等，重复领不报错）。
 	AutoClaim bool `json:"auto_claim"`
-	// ClaimAfterHour / ClaimAfterMinute 是每天开始签到的本地时刻。
-	// 福利 Token 当日 24:00 清零，所以默认 00:05 领。
+	// ClaimAfterHour / ClaimAfterMinute 是每天开始领取的本地时刻。
+	// 运营活动的权益按自然日刷新，所以默认 00:05 领。
 	ClaimAfterHour   int `json:"claim_after_hour"`
 	ClaimAfterMinute int `json:"claim_after_minute"`
 	// WriteBackToIDE 允许把续期结果回写 state.vscdb。
@@ -130,7 +143,7 @@ type Store struct {
 func DefaultSettings() Settings {
 	return Settings{
 		ModelAliases:   map[string]string{},
-		DefaultModel:   "glm-5.3-flash",
+		DefaultModel:   codearts.DefaultModel,
 		RequestTimeout: 300,
 		MaxRetries:     3,
 		LogKeep:        500,
@@ -138,16 +151,22 @@ func DefaultSettings() Settings {
 		CORSOrigin:        "",
 		AutoRefresh:       true,
 		AllowCreditModels: true,
-		AutoClaim:         true,
-		ClaimAfterHour:    0,
-		ClaimAfterMinute:  5,
-		WriteBackToIDE:    true,
-		LiveTTLSeconds:    10,
-		PluginName:        codearts.PluginName,
-		PluginVersion:     codearts.PluginVersion,
-		IDEName:           codearts.IDEName,
-		IDEVersion:        codearts.IDEVersion,
-		Language:          "zh-cn",
+		// 限流默认开启并给保守值：正常单客户端（串行对话 / 轻量 Agent 循环）
+		// 用不到这个量级，失控时（循环重试 / 死循环）立刻生效。
+		RateLimitEnabled:     true,
+		RateLimitQPS:         5,
+		RateLimitBurst:       10,
+		RateLimitConcurrency: 8,
+		AutoClaim:            true,
+		ClaimAfterHour:       0,
+		ClaimAfterMinute:     5,
+		WriteBackToIDE:       true,
+		LiveTTLSeconds:       10,
+		PluginName:           codearts.PluginName,
+		PluginVersion:        codearts.PluginVersion,
+		IDEName:              codearts.IDEName,
+		IDEVersion:           codearts.IDEVersion,
+		Language:             "zh-cn",
 	}
 }
 
@@ -193,6 +212,15 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+// legacyDefaultModels 是已不存在的旧默认模型名。
+//
+// 免费权益通道下线后这些名字在上游一律报 4005，启动时把它们迁移到当前默认模型。
+var legacyDefaultModels = map[string]bool{
+	"glm-5.3-flash":          true,
+	"deepseek-v4-flash-0731": true,
+	"deepseek-v4-pro-0813":   true,
+}
+
 // applyDefaults 补齐缺失 / 非法字段。
 func (s *Store) applyDefaults() {
 	def := DefaultSettings()
@@ -203,6 +231,15 @@ func (s *Store) applyDefaults() {
 	if st.DefaultModel == "" {
 		st.DefaultModel = def.DefaultModel
 	}
+	// 免费权益通道下线后的老状态文件里存的还是 glm-5.3-flash 这类已不存在的模型名，
+	// 启动时直接迁移到当前的默认模型。
+	if legacyDefaultModels[st.DefaultModel] {
+		st.DefaultModel = def.DefaultModel
+	}
+	// 强制模型优先级最高：它若还是死模型名，每个请求都会 404。
+	if legacyDefaultModels[st.ForceModel] {
+		st.ForceModel = ""
+	}
 	if st.RequestTimeout <= 0 {
 		st.RequestTimeout = def.RequestTimeout
 	}
@@ -211,6 +248,17 @@ func (s *Store) applyDefaults() {
 	}
 	if st.LogKeep <= 0 {
 		st.LogKeep = def.LogKeep
+	}
+	// 限流参数留零值时用默认值：老状态文件没有这几个字段，
+	// 从 DefaultSettings() 起手 unmarshal 能保住 bool，但 int 需要在这里兜底。
+	if st.RateLimitQPS <= 0 {
+		st.RateLimitQPS = def.RateLimitQPS
+	}
+	if st.RateLimitBurst <= 0 {
+		st.RateLimitBurst = def.RateLimitBurst
+	}
+	if st.RateLimitConcurrency < 0 {
+		st.RateLimitConcurrency = def.RateLimitConcurrency
 	}
 	if st.LiveTTLSeconds <= 0 {
 		st.LiveTTLSeconds = def.LiveTTLSeconds
