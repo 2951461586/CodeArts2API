@@ -208,8 +208,8 @@ func (s *Server) chatOnce(ctx context.Context, acct *codearts.Account, model reg
 		}
 		return nil, err
 	}
-	if msg, bad := codearts.IsUpstreamBusinessError(raw); bad {
-		return nil, codearts.UpstreamBusinessError(msg)
+	if msg, status, bad := codearts.IsUpstreamBusinessError(raw); bad {
+		return nil, codearts.UpstreamBusinessError(status, msg)
 	}
 	return raw, nil
 }
@@ -222,8 +222,8 @@ func (s *Server) aggregateViaStream(ctx context.Context, sess *codearts.Session,
 	}
 	var chunks [][]byte
 	err = s.Up.ChatStream(ctx, sess, model.ID, streamBody, func(chunk []byte) error {
-		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
-			return codearts.UpstreamBusinessError(msg)
+		if msg, status, bad := codearts.IsUpstreamBusinessError(chunk); bad {
+			return codearts.UpstreamBusinessError(status, msg)
 		}
 		chunks = append(chunks, append([]byte(nil), chunk...))
 		return nil
@@ -241,8 +241,8 @@ func (s *Server) streamOnce(ctx context.Context, acct *codearts.Account, model r
 		return err
 	}
 	return s.Up.ChatStream(ctx, sess, model.ID, body, func(chunk []byte) error {
-		if msg, bad := codearts.IsUpstreamBusinessError(chunk); bad {
-			return codearts.UpstreamBusinessError(msg)
+		if msg, status, bad := codearts.IsUpstreamBusinessError(chunk); bad {
+			return codearts.UpstreamBusinessError(status, msg)
 		}
 		return onChunk(chunk)
 	})
@@ -335,6 +335,12 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 				return used, lastErr
 			}
 			continue
+		}
+		// 请求本身非法（参数越界 / 模型未注册 / tools 超长）：换哪个账号都一样，
+		// 不是账号故障。计入失败会让任意客户端发错一次参数就把健康账号标成 error，
+		// 还会累加 failures 触发熔断。直接返回，让客户端去改请求。
+		if codearts.IsClientRequestError(err) {
+			return used, lastErr
 		}
 		s.Store.MarkAccountResult(acct.ID, false, err.Error())
 	}

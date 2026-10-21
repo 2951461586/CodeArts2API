@@ -160,8 +160,13 @@ func AggregateSSE(chunks [][]byte) ([]byte, error) {
 }
 
 // UpstreamBusinessError 把「HTTP 200 但业务失败」包装成可分类的 UpstreamError。
-func UpstreamBusinessError(msg string) error {
-	return &UpstreamError{Status: http.StatusOK, Message: msg}
+//
+// status 是业务状态码（见 statusFromCode），用于区分「请求有问题」和「账号有问题」。
+func UpstreamBusinessError(status int, msg string) error {
+	if status <= 0 {
+		status = http.StatusBadRequest
+	}
+	return &UpstreamError{Status: status, Message: msg}
 }
 
 // transientCodes 是「换个时机重试即可」的上游业务码，不应计为账号故障。
@@ -189,6 +194,24 @@ func IsTransientUpstream(err error) bool {
 		}
 	}
 	return false
+}
+
+// IsClientRequestError 报告这个上游错误是否由**请求本身**引起，与账号无关。
+//
+// 上游对参数非法（max_tokens 越界、temperature 越界、tools 超长等）会返回
+// 业务码 400 / 422。这类错误换哪个账号都一样，绝不能计入账号故障 ——
+// 否则任何一个客户端发错一次参数，就会把健康账号标成 error 并累加失败数。
+func IsClientRequestError(err error) bool {
+	ue, ok := err.(*UpstreamError)
+	if !ok {
+		return false
+	}
+	if ue.Status == http.StatusBadRequest || ue.Status == http.StatusUnprocessableEntity {
+		return true
+	}
+	return strings.Contains(ue.Message, "param is invalid") ||
+		strings.Contains(ue.Message, "unsupported model") ||
+		strings.Contains(ue.Message, "length over limit")
 }
 
 // IsEmptyRejection 报告一个上游错误是否是「空 body 的 4xx」。

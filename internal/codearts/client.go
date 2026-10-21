@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -367,8 +368,11 @@ func (c *Client) Probe(ctx context.Context, sess *Session, model string) error {
 
 // detectUpstreamError 识别「HTTP 200 但业务失败」的响应。
 //
-// 上游对未知模型等错误会返回 200 + {"error_code":"4005","error_msg":"unsupported model"}，
+// 上游对未知模型、参数非法等错误会返回 200 + {"error_code":"4005","error_msg":"..."}，
 // 不识别的话会被当成正常回复透传给客户端。
+//
+// 注意：这里返回的 Status 是**业务状态码**（从 error_code 里取），不是 HTTP 状态码。
+// 早先固定写 http.StatusOK，导致错误信息出现自相矛盾的「上游 HTTP 200: ...」。
 func detectUpstreamError(raw []byte) error {
 	var probe struct {
 		ErrorCode string          `json:"error_code"`
@@ -384,7 +388,34 @@ func detectUpstreamError(raw []byte) error {
 	if len(probe.Choices) > 0 && string(probe.Choices) != "null" {
 		return nil
 	}
-	return &UpstreamError{Status: http.StatusOK, Message: probe.ErrorCode + ": " + probe.ErrorMsg}
+	return newBusinessError(probe.ErrorCode, probe.ErrorMsg)
+}
+
+// newBusinessError 把上游业务错误码转成 UpstreamError。
+//
+// error_code 可能是 "4005" 这样的纯数字，也可能是 "InferHub.002002009.404" 这样的复合码；
+// 取其中的 HTTP 状态段（3 位数字）作为 Status，取不到就退回 400 —— 业务错误一律是
+// 客户端可修正的问题，绝不该再出现 200。
+func newBusinessError(code, msg string) *UpstreamError {
+	if msg == "" {
+		msg = "上游返回业务错误"
+	}
+	return &UpstreamError{Status: statusFromCode(code), Message: code + ": " + msg}
+}
+
+// statusFromCode 从业务错误码里提取 HTTP 状态码。
+func statusFromCode(code string) int {
+	// 纯数字且是合法状态码
+	if n, err := strconv.Atoi(strings.TrimSpace(code)); err == nil && n >= 400 && n <= 599 {
+		return n
+	}
+	// 复合码：取最后一段 3 位数字（如 InferHub.002002009.404 -> 404）
+	if i := strings.LastIndex(code, "."); i >= 0 {
+		if n, err := strconv.Atoi(code[i+1:]); err == nil && n >= 400 && n <= 599 {
+			return n
+		}
+	}
+	return http.StatusBadRequest
 }
 
 // truncate 截断长字符串，用于错误信息。
@@ -396,22 +427,25 @@ func truncate(s string, n int) string {
 }
 
 // IsUpstreamBusinessError 报告一个 SSE 分片是否是业务错误。
-func IsUpstreamBusinessError(payload []byte) (string, bool) {
+//
+// 返回的 status 是**业务状态码**（见 statusFromCode），调用方据此判断
+// 这是「请求本身有问题」还是「账号有问题」。
+func IsUpstreamBusinessError(payload []byte) (msg string, status int, bad bool) {
 	var probe struct {
 		ErrorCode string `json:"error_code"`
 		ErrorMsg  string `json:"error_msg"`
 	}
 	if err := json.Unmarshal(payload, &probe); err != nil {
-		return "", false
+		return "", 0, false
 	}
 	if probe.ErrorCode == "" {
-		return "", false
+		return "", 0, false
 	}
-	msg := probe.ErrorMsg
+	msg = probe.ErrorMsg
 	if msg == "" {
 		msg = "上游返回业务错误 " + probe.ErrorCode
 	}
-	return msg, true
+	return msg, statusFromCode(probe.ErrorCode), true
 }
 
 // EnsureTrimmed 去掉字符串两端空白（供调用方复用）。

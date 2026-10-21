@@ -29,12 +29,14 @@ func newTestServer(t *testing.T, accounts int, retries int) *Server {
 		s.RateLimitEnabled = false
 	})
 	for i := 0; i < accounts; i++ {
+		// AccessKey 必须唯一：UpsertAccount 按 AK 去重，全用 "ak" 会被合并成一个账号。
+		id := string(rune('a' + i))
 		st.UpsertAccount(&codearts.Account{
-			ID:      string(rune('a' + i)),
-			Name:    "acct",
+			ID:      id,
+			Name:    "acct-" + id,
 			Enabled: true,
 			Status:  "ok",
-			Session: &codearts.Session{AccessKey: "ak", SecretKey: "sk"},
+			Session: &codearts.Session{AccessKey: "ak-" + id, SecretKey: "sk-" + id},
 		})
 	}
 	return &Server{Store: st, Up: codearts.NewClient(), Reg: registry.New(),

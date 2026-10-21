@@ -673,7 +673,14 @@
     $("#probeSummary").textContent = "测活中…（每个模型会真实消耗极少量积分）";
     return api("/admin/api/models/probe", {method:"POST", body:{}}).then(function(r){
       tb.textContent = "";
-      (r.results || []).forEach(function(x){
+      var rows = r.results || [];
+      if (!rows.length) {
+        // 后端没返回任何行时也要说清楚，否则用户面对一张空表不知道发生了什么
+        var c = cell("没有可探测的模型：账号池为空，或模型清单尚未拉到", "empty");
+        c.colSpan = 4;
+        var tr = mk("tr"); tr.appendChild(c); tb.appendChild(tr);
+      }
+      rows.forEach(function(x){
         var resCell = cell("");
         resCell.appendChild(x.ok ? pill("可用", "ok") : pill("不可用", "err"));
         tb.appendChild(row([
@@ -687,8 +694,13 @@
         (r.unavailable ? "，不可用 " + r.unavailable : "");
       toast("测活完成：" + (r.available||0) + "/" + (r.total||0) + " 可用", "ok");
     }).catch(function(e){
+      // 失败时也要在表里留痕，不能只弹一个会消失的 toast
+      tb.textContent = "";
+      var c = cell("测活请求失败：" + (e && e.message ? e.message : "未知错误"), "empty");
+      c.colSpan = 4;
+      var tr = mk("tr"); tr.appendChild(c); tb.appendChild(tr);
       $("#probeSummary").textContent = "";
-      toast("测活失败：" + e.message, "err");
+      toast("测活失败：" + (e && e.message ? e.message : "未知错误"), "err");
     });
   });
   on("#claimAll", function(){ return claim(null); });
