@@ -59,10 +59,21 @@
       <div class="topbar-actions">
         <span class="sync" id="lastSync" aria-live="polite"></span>
         <div class="pw-group">
-          <input id="pw" type="password" placeholder="管理密码（如已设置）" autocomplete="current-password"
-                 aria-label="管理密码">
-          <button class="btn ghost xs" id="savePw" title="仅在本标签页记住，关闭标签页即失效">记住</button>
-          <button class="btn ghost xs" id="forgetPw" title="清除本标签页记住的管理密码">忘记</button>
+          <button class="pw-toggle" id="pwToggle" aria-expanded="false" aria-controls="pwPanel"
+                  title="管理密码：解锁账号、密钥等管理接口">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
+            <span id="pwToggleText">未解锁</span>
+          </button>
+          <div class="pw-panel" id="pwPanel">
+            <label for="pw">管理密码</label>
+            <input id="pw" type="password" placeholder="输入管理密码" autocomplete="current-password"
+                   aria-label="管理密码">
+            <div class="row">
+              <button class="btn primary xs" id="savePw">记住</button>
+              <button class="btn ghost xs" id="forgetPw">忘记</button>
+            </div>
+            <span class="hint">只在本标签页记住，关闭标签页即失效。密码等价于「导出完整登录态」的权限。</span>
+          </div>
         </div>
         <button class="btn primary" id="refresh">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/></svg>
@@ -79,9 +90,13 @@
           <div class="card-head">
             <div>
               <h2>活动福利</h2>
-              <p class="card-sub">运营活动与可领取奖励</p>
+              <p class="card-sub">运营活动与可领取奖励（按账号查询，每个账号的可领项不同）</p>
             </div>
             <div class="card-actions">
+              <label class="inline-field">
+                <span>账号</span>
+                <select id="welfareAccount" aria-label="选择要查看活动福利的账号"></select>
+              </label>
               <button class="btn" id="loadWelfare">刷新列表</button>
               <button class="btn" id="claimWelfareNow">领取可领奖励</button>
               <button class="btn" id="genInvite">生成邀请链接</button>

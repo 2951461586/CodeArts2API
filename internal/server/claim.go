@@ -139,8 +139,18 @@ func (s *Server) WelfareSnapshot(ctx context.Context, a *codearts.Account) (*cod
 }
 
 // handleAdminWelfare 返回运营活动清单（「活动福利」）。
+//
+// 活动清单是**按账号**查询的（每个账号的领取状态不同），所以支持用 ?id= 指定；
+// 不指定时回退到调度池里的下一个账号。响应里带上账号 id/名称，
+// 控制台据此显示「当前查看的是哪个号」，避免用户误以为只有某一个号能领。
 func (s *Server) handleAdminWelfare(w http.ResponseWriter, r *http.Request) {
-	acct := s.Store.NextAccount()
+	var acct *codearts.Account
+	if id := r.URL.Query().Get("id"); id != "" {
+		acct = s.Store.Account(id)
+	}
+	if acct == nil {
+		acct = s.Store.NextAccount()
+	}
 	if acct == nil {
 		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
 		return
@@ -155,7 +165,11 @@ func (s *Server) handleAdminWelfare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]map[string]any, 0, len(delivery.Campaigns))
+	claimable := 0
 	for _, c := range delivery.Campaigns {
+		if c.Claimable {
+			claimable++
+		}
 		items = append(items, map[string]any{
 			"campaign_id":    c.CampaignID,
 			"title":          c.Title,
@@ -173,10 +187,28 @@ func (s *Server) handleAdminWelfare(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":        true,
-		"account":   acct.DisplayName(),
-		"campaigns": items,
+		"ok":      true,
+		"account": acct.DisplayName(),
+		"id":      acct.ID,
+		// 让前端能把账号下拉框列全，而不是只看到当前这一个
+		"accounts":        s.welfareAccountOptions(),
+		"campaigns":       items,
+		"claimable_count": claimable,
 	})
+}
+
+// welfareAccountOptions 返回可用于查询活动清单的账号列表。
+func (s *Server) welfareAccountOptions() []map[string]any {
+	accts := s.Store.Accounts()
+	out := make([]map[string]any, 0, len(accts))
+	for _, a := range accts {
+		out = append(out, map[string]any{
+			"id": a.ID, "name": a.DisplayName(),
+			"enabled": a.Enabled, "status": a.Status,
+			"permanent": a.Session != nil && a.Session.IsPermanent(),
+		})
+	}
+	return out
 }
 
 // handleAdminInvite 生成（或取回）专属邀请码与邀请链接。

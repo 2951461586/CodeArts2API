@@ -604,15 +604,46 @@
     });
   }
 
+  // 当前选中的福利账号（空 = 让后端按调度池挑一个）
+  var welfareAccountID = "";
+
   function loadWelfare(){
     $("#welfareHint").textContent = "加载中…";
-    return api("/admin/api/welfare").then(function(r){
+    var q = welfareAccountID ? ("?id=" + encodeURIComponent(welfareAccountID)) : "";
+    return api("/admin/api/welfare" + q).then(function(r){
       renderWelfare(r.campaigns);
-      $("#welfareHint").textContent = "账号：" + (r.account || "");
+      renderWelfareAccountPicker(r);
+      $("#welfareHint").textContent = r.claimable_count
+        ? ("当前账号 " + (r.account || "") + "，可领 " + r.claimable_count + " 项")
+        : ("当前账号 " + (r.account || "") + "，暂无可领");
     }).catch(function(e){
       $("#welfareHint").textContent = "";
       toast("获取活动列表失败：" + e.message, "err");
     });
+  }
+
+  // renderWelfareAccountPicker 把账号下拉框填满，并同步当前选择。
+  //
+  // 之前只显示一个账号名，很容易被误解成「只有这个号能领」——实际上
+  // 活动清单是按账号查的，每个号的可领项都不同。
+  function renderWelfareAccountPicker(r){
+    var sel = $("#welfareAccount");
+    if (!sel) return;
+    var list = r.accounts || [];
+    sel.textContent = "";
+    list.forEach(function(a){
+      var o = document.createElement("option");
+      o.value = a.id;
+      o.textContent = a.name + (a.permanent ? "（永久 AK/SK）" : "");
+      if (a.id === r.id) o.selected = true;
+      sel.appendChild(o);
+    });
+    if (r.id) welfareAccountID = r.id;
+    sel.disabled = list.length <= 1;
+    // 账号只有一个时说明白，别让用户以为漏了
+    sel.title = list.length <= 1
+      ? "当前只有 1 个账号"
+      : "活动清单按账号查询，每个账号的可领项不同";
   }
 
   // isTrustedAuthURL 只允许华为云门户 / 本机回环的授权地址。
@@ -706,14 +737,43 @@
 
   on("#savePw", function(){
     storePw(pw());
+    updatePwToggle();
+    $("#pwPanel").classList.remove("open");
+    $("#pwToggle").setAttribute("aria-expanded", "false");
     toast("已在本标签页记住管理密码（关闭标签页即失效）", "ok");
     return refresh();
   });
   on("#forgetPw", function(){
     clearStoredPw();
     $("#pw").value = "";
+    updatePwToggle();
     toast("已清除本标签页记住的管理密码", "ok");
   });
+  // 顶栏密码框折叠：默认只露一个锁图标，点开才展开输入框。
+  on("#pwToggle", function(){
+    var panel = $("#pwPanel");
+    var open = panel.classList.toggle("open");
+    $("#pwToggle").setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) $("#pw").focus();
+  });
+  // 点面板外部自动收起，避免挡住下面的内容
+  document.addEventListener("click", function(ev){
+    var panel = $("#pwPanel");
+    if (!panel || !panel.classList.contains("open")) return;
+    if (panel.contains(ev.target) || $("#pwToggle").contains(ev.target)) return;
+    panel.classList.remove("open");
+    $("#pwToggle").setAttribute("aria-expanded", "false");
+  });
+  // 更新顶栏锁图标的状态文案
+  function updatePwToggle(){
+    var has = pw() !== "";
+    var btn = $("#pwToggle");
+    var txt = $("#pwToggleText");
+    if (!btn || !txt) return;
+    txt.textContent = has ? "已解锁" : "未解锁";
+    btn.classList.toggle("on", has);
+    btn.title = has ? "已记住管理密码（仅本标签页）" : "管理密码：解锁账号、密钥等管理接口";
+  }
   on("#refresh", function(){
     var jobs = [refresh()];
     if ($("#tab-logs").classList.contains("on")) jobs.push(refreshLogs());
@@ -778,10 +838,17 @@
   });
   on("#claimAll", function(){ return claim(null); });
   on("#loadWelfare", loadWelfare);
+  // 切换账号后重新拉该账号的活动清单（各账号的领取状态不同）
+  $("#welfareAccount").addEventListener("change", function(){
+    welfareAccountID = this.value;
+    loadWelfare();
+  });
   on("#claimWelfareNow", function(){ return claim(null).then(loadWelfare); });
   on("#genInvite", function(){
     toast("生成中…");
-    return api("/admin/api/invite", {method:"POST", body:{}}).then(function(r){
+    // 用当前选中的账号生成，避免「看到的是 A 号、生成的是 B 号」
+    var body = welfareAccountID ? {id: welfareAccountID} : {};
+    return api("/admin/api/invite", {method:"POST", body:body}).then(function(r){
       $("#inviteURL").value = r.invite_url || "";
       $("#inviteStat").textContent = "已激活 " + (r.activation_count||0) + " / " + (r.max_activations||0) +
         " 次 · 状态 " + (r.status||"") + " · 账号 " + (r.account||"");
@@ -927,6 +994,7 @@
 
   var initialPw = loadPw();
   if (initialPw) $("#pw").value = initialPw;
+  updatePwToggle();
   if (pwMigrated) {
     toast("已清除旧版本存在 localStorage 里的明文管理密码，请重新输入一次。", "err");
   }

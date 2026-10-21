@@ -194,7 +194,8 @@ nav.tabs button:focus-visible{outline-offset:-2px}
   align-items:center;
   gap:16px;
   min-height:var(--topbar-h);
-  padding:10px 28px;
+  /* 左右内边距跟随 main 的居中宽度，保证标题与正文左缘对齐 */
+  padding:10px max(28px, calc((100% - 1280px) / 2 + 28px));
   background:var(--bg);
   border-bottom:1px solid var(--line);
 }
@@ -235,33 +236,74 @@ nav.tabs button:focus-visible{outline-offset:-2px}
 }
 
 .pw-group{
+  position:relative;
   display:flex;
   align-items:center;
   gap:4px;
-  padding:3px;
+}
+/* 折叠态：只露一个图标按钮，点开才出现输入框 */
+.pw-toggle{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  height:30px;
+  padding:0 10px;
   border:1px solid var(--line-2);
   border-radius:var(--r-sm);
   background:var(--surface);
-  transition:border-color .14s ease;
+  color:var(--text-2);
+  font:inherit;
+  font-size:12.5px;
+  cursor:pointer;
+  transition:border-color .14s ease,color .14s ease,background .14s ease;
 }
-.pw-group:focus-within{border-color:var(--accent)}
-.pw-group input{
-  width:168px;
-  height:26px;
-  padding:0 8px;
-  border:0;
+.pw-toggle:hover{background:var(--surface-3);color:var(--text)}
+.pw-toggle:focus-visible{outline-offset:1px}
+.pw-toggle .ico{width:13px;height:13px}
+.pw-toggle.on{color:var(--ok);border-color:var(--ok-line);background:var(--ok-soft)}
+.pw-toggle.on .ico{color:var(--ok)}
+
+.pw-panel{
+  position:absolute;
+  top:calc(100% + 8px);
+  right:0;
+  z-index:30;
+  display:none;
+  flex-direction:column;
+  gap:8px;
+  width:260px;
+  padding:12px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-sm);
+  background:var(--surface);
+  box-shadow:0 12px 32px rgba(0,0,0,.28);
+}
+.pw-panel.open{display:flex}
+.pw-panel label{
+  font-size:12px;
+  color:var(--text-3);
+}
+.pw-panel input{
+  width:100%;
+  height:30px;
+  padding:0 9px;
+  border:1px solid var(--line-2);
   border-radius:var(--r-xs);
-  background:transparent;
+  background:var(--bg);
   color:var(--text);
   font:inherit;
   font-size:12.5px;
 }
-.pw-group input::placeholder{color:var(--text-3)}
-.pw-group input:focus{outline:none}
+.pw-panel input::placeholder{color:var(--text-3)}
+.pw-panel input:focus{outline:none;border-color:var(--accent)}
+.pw-panel .row{gap:6px}
+.pw-panel .hint{font-size:11.5px;line-height:1.5}
 
 main{
   width:100%;
   max-width:1280px;
+  /* 宽屏下居中，否则内容会贴在侧栏右边、右侧留一大片空白 */
+  margin:0 auto;
   padding:24px 28px 72px;
 }
 
@@ -315,6 +357,26 @@ section.on{
 }
 .card-actions > input,.card-actions > select{height:32px}
 .card-actions > .hint{margin:0}
+/* 卡头里的「标签 + 控件」组合（如 账号 [下拉框]） */
+.inline-field{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:12.5px;
+  color:var(--text-3);
+}
+.inline-field select{
+  height:32px;
+  max-width:220px;
+  padding:0 8px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-sm);
+  background:var(--surface);
+  color:var(--text);
+  font:inherit;
+  font-size:12.5px;
+}
+.inline-field select:focus{outline:none;border-color:var(--accent)}
 .subpanel{background:var(--surface-2)}
 
 /* ===== KPI ============================================================== */
