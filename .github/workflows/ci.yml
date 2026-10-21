@@ -14,15 +14,19 @@ jobs:
     name: test (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          # 本项目零第三方依赖（ADR 0001），因此没有 go.sum。
+          # setup-go 默认拿 go.sum 算缓存 key，找不到就整段缓存失效并告警；
+          # 指向 go.mod 后缓存仍能命中（主要收益是 GOCACHE 里的标准库编译产物）。
           cache: true
-      - uses: actions/setup-python@v5
+          cache-dependency-path: go.mod
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
 
@@ -52,11 +56,12 @@ jobs:
     name: build + test (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.mod
       # Windows 专属代码（DPAPI / 定长回写）只在 build tag 为 windows 时编译，
       # 因此必须单独跑一遍，避免 linux 任务漏掉编译错误。
       - name: build
