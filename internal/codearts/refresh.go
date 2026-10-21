@@ -34,16 +34,22 @@ import (
 // DPoP 载荷：{"htm":"POST","htu":<token URL>,"iat":<unix>,"jti":<64 位 hex>}
 
 // dpopProof 生成 DPoP 证明（ES256 紧凑 JWS）。
+//
+// publicJWK 允许为空：EC 私钥 JWK 本身就带 x/y，公钥可以从私钥派生。
+// 手工构造的 session JSON（例如从旧版 auths/*.json 转换而来）常常只写了
+// privateKeyJwk，缺公钥时不能直接判失败——那会把一次可自愈的导入变成
+// 「账号登录态已失效」。
 func dpopProof(privateJWK, publicJWK json.RawMessage, htm, htu string) (string, error) {
 	key, err := parseECPrivateJWK(privateJWK)
 	if err != nil {
 		return "", err
 	}
 
-	// protected header 必须原样带上登录时绑定的公钥（服务端按 jkt 校验）
-	var pub map[string]any
-	if err := json.Unmarshal(publicJWK, &pub); err != nil {
-		return "", fmt.Errorf("DPoP 公钥解析失败: %w", err)
+	// protected header 必须原样带上登录时绑定的公钥（服务端按 jkt 校验）。
+	// 缺失时用私钥里的 x/y 重建——指纹与登录时绑定的仍是同一个。
+	pub, err := publicJWKMap(privateJWK, publicJWK)
+	if err != nil {
+		return "", err
 	}
 	header := map[string]any{"alg": "ES256", "typ": "dpop+jwt", "jwk": pub}
 	payload := map[string]any{
@@ -182,6 +188,33 @@ func (c *Client) Refresh(ctx context.Context, sess *Session) (*RefreshResult, er
 }
 
 // --- JWK 处理 ---
+
+// publicJWKMap 返回用于 DPoP protected header 的公钥 JWK。
+//
+// 优先用显式提供的 publicJWK；为空（或缺少 x/y）时从私钥 JWK 里派生。
+// 返回的 map 只含 kty/crv/x/y，绝不带 d。
+func publicJWKMap(privateJWK, publicJWK json.RawMessage) (map[string]any, error) {
+	if len(publicJWK) > 0 && string(publicJWK) != "null" {
+		var pub map[string]any
+		if err := json.Unmarshal(publicJWK, &pub); err != nil {
+			return nil, fmt.Errorf("DPoP 公钥解析失败: %w", err)
+		}
+		// 有些导出会把整个私钥塞进 publicKeyJwk，这里必须剥掉 d。
+		delete(pub, "d")
+		if str(pub, "x") != "" && str(pub, "y") != "" {
+			return pub, nil
+		}
+	}
+
+	var j ecJWK
+	if err := json.Unmarshal(privateJWK, &j); err != nil {
+		return nil, fmt.Errorf("DPoP 私钥解析失败: %w", err)
+	}
+	if j.X == "" || j.Y == "" {
+		return nil, fmt.Errorf("DPoP 公钥缺失，且无法从私钥派生")
+	}
+	return map[string]any{"kty": j.Kty, "crv": j.Crv, "x": j.X, "y": j.Y}, nil
+}
 
 // ecJWK 是 EC 私钥的 JWK 表示。
 type ecJWK struct {

@@ -55,6 +55,18 @@ func DescribeRefreshError(err error) string {
 		return "refresh_token 已过期"
 	case strings.Contains(msg, "APIG.0301"), strings.Contains(msg, "APIG.0303"):
 		return "签名校验失败，凭据可能已失效"
+	// 本地构造失败：这类消息里也带 "DPoP"，必须排在下面那条上游错误之前，
+	// 否则「导入时漏了公钥」会被误报成「上游校验失败」，把用户引去重新登录。
+	case strings.Contains(msg, "DPoP 私钥缺失"),
+		strings.Contains(msg, "DPoP 私钥解析失败"),
+		strings.Contains(msg, "DPoP 私钥类型不支持"),
+		strings.Contains(msg, "DPoP 公钥缺失"),
+		strings.Contains(msg, "DPoP 公钥解析失败"),
+		strings.Contains(msg, "DPoP 私钥 x 解析失败"),
+		strings.Contains(msg, "DPoP 私钥 y 解析失败"),
+		strings.Contains(msg, "DPoP 私钥 d 解析失败"),
+		strings.Contains(msg, "DPoP 公钥不在 P-256 曲线上"):
+		return "本地 DPoP 密钥材料不完整（" + msg + "）：无需重新登录，用完整 session JSON 重新导入即可"
 	case strings.Contains(msg, "DPoP"):
 		return "DPoP 密钥校验失败"
 	}
