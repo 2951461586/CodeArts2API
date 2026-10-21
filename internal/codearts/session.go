@@ -14,6 +14,26 @@ import (
 // authentication provider id 是 huawei-cloud-authentication —— 两者不同名。
 const SecretItemKey = `secret://{"extensionId":"huaweicloud.authentication","key":"HuaweiCloudSession"}`
 
+// CredentialKind 区分两种上游凭据形态。
+//
+// 二者在签名与生命周期上完全不同，必须显式区分，不能靠「有没有过期时间」猜：
+//
+//   - kindSTS（默认，零值）：STS 临时凭据，约 2 小时有效，靠 refresh_token +
+//     DPoP 私钥 + PKCE verifier 续期。所有 OAuth 路径（桌面端导入 / 浏览器登录 /
+//     session JSON 导入）产出的都是这一类。
+//   - kindAKSK：华为云 IAM 永久 AK/SK，不过期、也不存在续期一说。它只做
+//     SDK-HMAC-SHA256 签名，不携带 security_token。
+type CredentialKind string
+
+const (
+	kindSTS  CredentialKind = ""
+	kindAKSK CredentialKind = "aksk"
+)
+
+// CredentialKindAKSK 是永久 AK/SK 的凭据类型字面量，供上层（admin 接口、控制台）
+// 显式声明凭据形态时复用，避免各处硬编码字符串。
+const CredentialKindAKSK = kindAKSK
+
 // Session 是 CodeArts Agent 登录会话中的凭据部分（对应 state.vscdb 里的那条 secret）。
 type Session struct {
 	AccountLabel  string    `json:"account_label"`
@@ -24,6 +44,8 @@ type Session struct {
 	AccessToken   string    `json:"access_token"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	RefreshToken  string    `json:"refresh_token"`
+	// CredentialKind 标记凭据形态；空值等价于 kindSTS（兼容旧状态文件）。
+	CredentialKind CredentialKind `json:"credential_kind,omitempty"`
 	// 续期用的 DPoP 密钥与 PKCE verifier（来自 loginContext）
 	DPoPPrivateJWK json.RawMessage `json:"dpop_private_jwk,omitempty"`
 	DPoPPublicJWK  json.RawMessage `json:"dpop_public_jwk,omitempty"`
@@ -41,10 +63,21 @@ type Session struct {
 // 手工录入、浏览器登录、会话里缺 expires_at 时都用它。
 const DefaultCredentialTTL = 110 * time.Minute
 
+// IsPermanent 报告该凭据是否为不过期的 IAM AK/SK。
+func (s *Session) IsPermanent() bool {
+	return s != nil && s.CredentialKind == kindAKSK
+}
+
 // Valid 报告凭据是否在 margin 之内仍然有效。
 func (s *Session) Valid(margin time.Duration) bool {
 	if s == nil || s.AccessKey == "" || s.SecretKey == "" {
 		return false
+	}
+	// 永久 AK/SK 没有过期时间，也不需要续期：只要 AK/SK 非空就一直可用。
+	// 必须在这里短路，否则会落到下面的「ExpiresAt 为零 = 不可用」分支，
+	// 账号在 110 分钟 TTL 用尽后永久失效。
+	if s.IsPermanent() {
+		return true
 	}
 	if s.ExpiresAt.IsZero() {
 		// 没有过期时间就无从判断新鲜度，按「不可用」处理，
@@ -59,15 +92,20 @@ func (s *Session) Valid(margin time.Duration) bool {
 
 // ExpiresIn 返回距过期的剩余时长。
 func (s *Session) ExpiresIn() time.Duration {
-	if s == nil || s.ExpiresAt.IsZero() {
+	if s == nil || s.IsPermanent() || s.ExpiresAt.IsZero() {
 		return 0
 	}
 	return time.Until(s.ExpiresAt)
 }
 
 // HasRefresh 报告是否具备自行续期的条件。
+//
+// 永久 AK/SK 不需要续期，这里返回 false 是「无续期概念」，不是「缺续期材料」。
 func (s *Session) HasRefresh() bool {
-	return s != nil && s.RefreshToken != "" && len(s.DPoPPrivateJWK) > 0 && s.CodeVerifier != ""
+	if s == nil || s.IsPermanent() {
+		return false
+	}
+	return s.RefreshToken != "" && len(s.DPoPPrivateJWK) > 0 && s.CodeVerifier != ""
 }
 
 // UpstreamSessionID 返回该凭据在上游的稳定会话 ID。

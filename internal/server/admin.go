@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"codearts2api/internal/apierr"
@@ -35,6 +36,8 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			row["expires_in"] = int(a.Session.ExpiresIn().Seconds())
 			row["has_refresh"] = a.Session.HasRefresh()
 			row["domain_id"] = codearts.Mask(a.Session.DomainID)
+			// 永久 AK/SK 没有过期时间，控制台据此显示「永不过期」而不是 1970。
+			row["permanent"] = a.Session.IsPermanent()
 		}
 		safe = append(safe, row)
 	}
@@ -79,6 +82,9 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		SecurityToken string `json:"security_token"`
 		SessionJSON   string `json:"session_json"`
 		ExpiresAt     int64  `json:"expires_at"`
+		// CredentialKind 显式声明凭据形态：留空或 "sts" 走临时凭据，
+		// "aksk" 表示 IAM 永久 AK/SK（不过期、不续期、不带 security_token）。
+		CredentialKind string `json:"credential_kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求体解析失败", "invalid_request_error")
@@ -110,6 +116,21 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(imported), "imported": imported})
 
 	case "manual":
+		// 永久 AK/SK：不过期、不续期，忽略 security_token 与 expires_at。
+		if strings.EqualFold(strings.TrimSpace(body.CredentialKind), string(codearts.CredentialKindAKSK)) {
+			acct, err := codearts.ManualAKSKAccount(body.Name, body.AccessKey, body.SecretKey)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+				return
+			}
+			isNew := s.Store.UpsertAccount(acct)
+			s.Cred.Invalidate(acct.ID)
+			s.persist()
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok": true, "new": isNew, "id": acct.ID, "credential_kind": "aksk",
+			})
+			return
+		}
 		acct, err := codearts.ManualAccount(body.Name, body.AccessKey, body.SecretKey, body.SecurityToken, unixTime(body.ExpiresAt))
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
@@ -425,6 +446,102 @@ func (s *Server) handleAdminCheckin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) defaultProbeModel() (registry.Model, bool) {
 	st := s.Store.Settings()
 	return s.Reg.Resolve(st.DefaultModel, st.ModelAliases)
+}
+
+// handleAdminModelProbe 逐个模型做一次最小真实请求，返回每个模型是否可用。
+//
+// 与 handleAdminCheckin 的区别：那个只探一个默认模型、判断的是「账号通不通」；
+// 这个遍历当前模型清单，判断的是「这个账号能不能用某个模型」——上游会把当前
+// 套餐未注册的模型也列进 /v1/models，只有真打一次才知道能不能用。
+//
+// 每个模型消耗极少量积分（max_tokens=8），调用方需在 UI 上提示。
+func (s *Server) handleAdminModelProbe(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID     string   `json:"id"`
+		Models []string `json:"models"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	targets := s.Store.Accounts()
+	if body.ID != "" {
+		targets = nil
+		if a := s.Store.Account(body.ID); a != nil {
+			targets = append(targets, a)
+		}
+	}
+	if len(targets) == 0 {
+		writeErr(w, http.StatusBadRequest, "没有可用账号", "invalid_request_error")
+		return
+	}
+
+	// 未指定模型时探测当前清单里的全部模型。
+	want := body.Models
+	if len(want) == 0 {
+		st := s.Store.Settings()
+		for _, m := range s.Reg.List(st.ModelAliases) {
+			// 别名与本体重复探测没有意义，只探上游真实 ID。
+			if m.Source == "alias" {
+				continue
+			}
+			want = append(want, m.ID)
+		}
+	}
+	if len(want) == 0 {
+		writeErr(w, http.StatusBadRequest, "模型清单为空", "invalid_request_error")
+		return
+	}
+
+	// 并发上限按模型数收敛：每个探测都是一次真实上游请求，串行太慢、
+	// 全并发又会撞单账号 3 会话的限制。
+	limit := 4
+	results := make([]map[string]any, len(want))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, modelID := range want {
+		wg.Add(1)
+		go func(idx int, modelID string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			row := map[string]any{"model": modelID}
+			// 依次尝试账号，任一账号能用即判定该模型可用。
+			for _, a := range targets {
+				ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+				sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
+				if err != nil {
+					row["ok"] = false
+					row["error"] = err.Error()
+					row["account"] = a.DisplayName()
+					cancel()
+					continue
+				}
+				err = s.Up.Probe(ctx, sess, modelID)
+				cancel()
+				if err == nil {
+					row["ok"] = true
+					row["account"] = a.DisplayName()
+					break
+				}
+				row["ok"] = false
+				row["error"] = err.Error()
+				row["account"] = a.DisplayName()
+			}
+			results[idx] = row
+		}(i, modelID)
+	}
+	wg.Wait()
+
+	okCount := 0
+	for _, row := range results {
+		if row["ok"] == true {
+			okCount++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "total": len(results), "available": okCount,
+		"unavailable": len(results) - okCount, "results": results,
+	})
 }
 
 // setIf 仅在指针非空时赋值。

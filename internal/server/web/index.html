@@ -225,6 +225,21 @@
             </table>
           </div>
           <p class="hint">AK / 域 ID 已脱敏展示。完整凭据与 refresh_token 只存于本机状态文件（0600）。</p>
+
+          <div class="settings-group">
+            <h3>模型测活</h3>
+            <p class="hint m-0">逐个模型发一次最小真实请求（max_tokens=8），判断当前账号能不能用。上游会把套餐未注册的模型也列进清单，只有真打一次才知道。每个模型消耗极少量积分。</p>
+            <div class="row mt-12">
+              <button class="btn primary" id="probeModels">测活全部模型</button>
+              <span class="hint m-0" id="probeSummary"></span>
+            </div>
+            <div class="table-wrap mt-12">
+              <table>
+                <thead><tr><th>模型</th><th>结果</th><th>账号</th><th>详情</th></tr></thead>
+                <tbody id="probeResults"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -243,18 +258,26 @@
                 <input id="manualName" placeholder="留空自动命名">
               </div>
               <div class="field">
+                <label for="manualKind">凭据类型</label>
+                <select id="manualKind">
+                  <option value="sts">STS 临时凭据（约 2 小时，可自动续期）</option>
+                  <option value="aksk">永久 AK/SK（不过期，不可续期）</option>
+                </select>
+              </div>
+              <div class="field">
                 <label for="manualAK">Access Key</label>
-                <input id="manualAK" placeholder="STS 临时 AK">
+                <input id="manualAK" placeholder="STS 临时 AK 或 IAM 永久 AK">
               </div>
               <div class="field">
                 <label for="manualSK">Secret Key</label>
                 <input id="manualSK">
               </div>
-              <div class="field">
+              <div class="field" id="manualSTSField">
                 <label for="manualSTS">Security Token（可选）</label>
                 <input id="manualSTS">
               </div>
             </div>
+            <p class="hint" id="manualKindHint">STS 临时凭据约 2 小时过期，到期需重新录入或用 refresh_token 续期。</p>
             <div class="row mt-12">
               <button class="btn primary" id="addManual">录入账号</button>
             </div>

@@ -221,6 +221,10 @@ func ImportFromDesktop(explicit string) ([]*ImportResult, error) {
 }
 
 // ManualAccount 用手工录入的 AK/SK/STS 构造账号（供 Docker / 跨平台场景使用）。
+//
+// 适用于 STS 临时凭据：必须有 security_token，且需要给出（或按 TTL 推定）过期时间，
+// 之后靠 refresh_token 续期。若拿到的是 IAM 永久 AK/SK（无 STS、无 refresh_token），
+// 请改用 ManualAKSKAccount，否则 110 分钟后会被判为过期且无法续期。
 func ManualAccount(name, ak, sk, sts string, expires time.Time) (*Account, error) {
 	if ak == "" || sk == "" {
 		return nil, fmt.Errorf("access key / secret key 不能为空")
@@ -244,6 +248,34 @@ func ManualAccount(name, ak, sk, sts string, expires time.Time) (*Account, error
 			SecurityToken: sts,
 			ExpiresAt:     expires,
 			Source:        "manual",
+		},
+	}, nil
+}
+
+// ManualAKSKAccount 用手工录入的 IAM 永久 AK/SK 构造账号。
+//
+// 与 ManualAccount 的区别是生命周期语义：永久 AK/SK 不过期、不续期、不带
+// security_token。Session 标记为 kindAKSK 后，Valid() 恒为真，Manager 也不会
+// 再尝试走 refresh 分支（HasRefresh 为 false 是「无此概念」而非「缺材料」）。
+func ManualAKSKAccount(name, ak, sk string) (*Account, error) {
+	if ak == "" || sk == "" {
+		return nil, fmt.Errorf("access key / secret key 不能为空")
+	}
+	if name == "" {
+		name = "永久AK/SK " + shortID(ak)
+	}
+	return &Account{
+		ID:      RandomHex(8),
+		Name:    name,
+		Source:  "manual-aksk",
+		Enabled: true,
+		Status:  "ok",
+		Session: &Session{
+			AccountLabel:   name,
+			AccessKey:      ak,
+			SecretKey:      sk,
+			CredentialKind: kindAKSK,
+			Source:         "manual-aksk",
 		},
 	}, nil
 }

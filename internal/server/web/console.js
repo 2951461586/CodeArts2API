@@ -256,7 +256,11 @@
       if (a.has_refresh) statusCell.appendChild(pill("可续期", "ok"));
 
       var expCell = cell("", "cell-stack");
-      if (a.expires_at) {
+      if (a.permanent) {
+        // 永久 AK/SK：没有过期时间，也不参与续期。
+        expCell.appendChild(mk("span", "mono", "永不过期"));
+        expCell.appendChild(mk("span", "sub", "IAM AK/SK"));
+      } else if (a.expires_at) {
         expCell.appendChild(mk("span", "mono", fmtTime(a.expires_at)));
         var left = mk("span", "sub", fmtDur(a.expires_in));
         if (a.expires_in !== undefined && a.expires_in <= 300) left.classList.add("warn-text");
@@ -632,13 +636,26 @@
     return Promise.all(jobs);
   });
   on("#importLocal", function(){ return accountOp("import", {}); });
+  // 凭据类型切换：永久 AK/SK 不需要 security_token，隐藏该项并更新提示。
+  // 注意 select 用 change 事件，不能复用只绑 onclick 的 on()。
+  $("#manualKind").addEventListener("change", function(){
+    var isAKSK = this.value === "aksk";
+    $("#manualSTSField").classList.toggle("hidden", isAKSK);
+    if (isAKSK) $("#manualSTS").value = "";
+    $("#manualKindHint").textContent = isAKSK
+      ? "永久 AK/SK 不过期、无需续期；请勿与 STS 临时凭据混用。"
+      : "STS 临时凭据约 2 小时过期，到期需重新录入或用 refresh_token 续期。";
+  });
   on("#addManual", function(){
     var ak = $("#manualAK").value.trim(), sk = $("#manualSK").value.trim();
+    var kind = $("#manualKind").value;
     if (!ak || !sk) { toast("请填写 Access Key 与 Secret Key", "err"); return; }
-    return accountOp("manual", {
+    var payload = {
       name: $("#manualName").value.trim(), access_key: ak, secret_key: sk,
-      security_token: $("#manualSTS").value.trim()
-    }).then(function(){
+      credential_kind: kind
+    };
+    if (kind !== "aksk") payload.security_token = $("#manualSTS").value.trim();
+    return accountOp("manual", payload).then(function(){
       $("#manualAK").value = ""; $("#manualSK").value = ""; $("#manualSTS").value = "";
     });
   });
@@ -650,6 +667,30 @@
     });
   });
   on("#checkinAll", function(){ return checkin(null); });
+  on("#probeModels", function(){
+    var tb = $("#probeResults");
+    tb.textContent = "";
+    $("#probeSummary").textContent = "测活中…（每个模型会真实消耗极少量积分）";
+    return api("/admin/api/models/probe", {method:"POST", body:{}}).then(function(r){
+      tb.textContent = "";
+      (r.results || []).forEach(function(x){
+        var resCell = cell("");
+        resCell.appendChild(x.ok ? pill("可用", "ok") : pill("不可用", "err"));
+        tb.appendChild(row([
+          cell(x.model, "mono"),
+          resCell,
+          cell(x.account || "—", "muted"),
+          cell(x.ok ? "" : (x.error || ""), "muted")
+        ]));
+      });
+      $("#probeSummary").textContent = "可用 " + (r.available||0) + " / " + (r.total||0) +
+        (r.unavailable ? "，不可用 " + r.unavailable : "");
+      toast("测活完成：" + (r.available||0) + "/" + (r.total||0) + " 可用", "ok");
+    }).catch(function(e){
+      $("#probeSummary").textContent = "";
+      toast("测活失败：" + e.message, "err");
+    });
+  });
   on("#claimAll", function(){ return claim(null); });
   on("#loadWelfare", loadWelfare);
   on("#claimWelfareNow", function(){ return claim(null).then(loadWelfare); });
