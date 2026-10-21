@@ -120,18 +120,21 @@
             </div>
             <div class="card-actions">
               <button class="btn" id="refreshModels">从上游刷新清单</button>
+              <button class="btn" id="probeAllModels">测活全部</button>
               <span class="hint m-0" id="modelHint"></span>
             </div>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>ID</th><th>名称</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th></tr></thead>
+              <thead><tr><th>ID</th><th>名称</th><th>积分倍率</th><th>上下文</th><th>最大输出</th><th>说明</th><th>测活</th></tr></thead>
               <tbody id="models"></tbody>
             </table>
           </div>
           <p class="hint">
             <b>所有模型都按积分计费</b>，会产生真实消耗。免费权益通道已于 2026-10 下线，
             无法识别的模型名会直接报 404（不会静默回落到其他模型）。
+            「测活」对单个模型发一次最小真实请求（max_tokens=8），只有真打一次才知道
+            上游是不是真的给你用。
           </p>
         </div>
       </section>
@@ -225,21 +228,6 @@
             </table>
           </div>
           <p class="hint">AK / 域 ID 已脱敏展示。完整凭据与 refresh_token 只存于本机状态文件（0600）。</p>
-
-          <div class="settings-group">
-            <h3>模型测活</h3>
-            <p class="hint m-0">逐个模型发一次最小真实请求（max_tokens=8），判断当前账号能不能用。上游会把套餐未注册的模型也列进清单，只有真打一次才知道。每个模型消耗极少量积分。</p>
-            <div class="row mt-12">
-              <button class="btn primary" id="probeModels">测活全部模型</button>
-              <span class="hint m-0" id="probeSummary"></span>
-            </div>
-            <div class="table-wrap mt-12">
-              <table>
-                <thead><tr><th>模型</th><th>结果</th><th>账号</th><th>详情</th></tr></thead>
-                <tbody id="probeResults"></tbody>
-              </table>
-            </div>
-          </div>
         </div>
 
         <div class="card">

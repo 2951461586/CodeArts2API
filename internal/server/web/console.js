@@ -223,17 +223,101 @@
     var tb = $("#models");
     tb.textContent = "";
     var models = d.models || [];
-    if (!models.length) { tb.appendChild(emptyRow(6, "无")); return; }
+    if (!models.length) { tb.appendChild(emptyRow(7, "无")); return; }
     models.forEach(function(m){
-      tb.appendChild(row([
+      lastModels[m.id] = m;
+      tb.appendChild(modelRow(m));
+    });
+    $("#modelHint").textContent = d.upstream_error ? ("最近一次上游刷新失败：" + d.upstream_error) : "";
+  }
+
+  // 每个模型的测活状态：id -> {state:"idle|busy|ok|err", err}
+  var modelProbeState = {};
+  // 最近一次渲染的模型元数据，供单行重绘时复用
+  var lastModels = {};
+
+  function modelRow(m){
+    var actionCell = cell("", "actions-cell");
+    // 别名只是名字映射，指向的仍是上游真实模型，单独测活没有意义。
+    if (m.source === "alias") {
+      actionCell.appendChild(mk("span", "hint m-0", "别名"));
+      return row([
         cell(m.id, "mono"), cell(m.name),
         cell(m.credit || "—", "mono"),
         cell(m.context ? fmtNum(m.context) : "—", "mono"),
         cell(m.max_output ? fmtNum(m.max_output) : "—", "mono"),
-        cell(m.description, "muted")
-      ]));
+        cell(m.description, "muted"),
+        actionCell
+      ]);
+    }
+
+    var btn = mk("button", "btn xs", "测活");
+    var st = modelProbeState[m.id] || { state: "idle" };
+    if (st.state === "busy") {
+      btn.disabled = true;
+      btn.textContent = "测活中…";
+    } else if (st.state === "ok" || st.state === "err") {
+      btn.textContent = "重测";
+    }
+    btn.onclick = function(){ probeOne(m.id, m.name || m.id); };
+
+    actionCell.appendChild(btn);
+    if (st.state === "ok") {
+      actionCell.appendChild(document.createTextNode(" "));
+      actionCell.appendChild(pill("可用", "ok"));
+    } else if (st.state === "err") {
+      actionCell.appendChild(document.createTextNode(" "));
+      var bad = pill("不可用", "err");
+      bad.title = st.err || "";
+      actionCell.appendChild(bad);
+    }
+
+    var r = row([
+      cell(m.id, "mono"), cell(m.name),
+      cell(m.credit || "—", "mono"),
+      cell(m.context ? fmtNum(m.context) : "—", "mono"),
+      cell(m.max_output ? fmtNum(m.max_output) : "—", "mono"),
+      cell(m.description, "muted"),
+      actionCell
+    ]);
+    if (st.state === "err" && st.err) r.title = st.err;
+    return r;
+  }
+
+  // probeOne 对单个模型测活，只重绘那一行。
+  function probeOne(modelID, label){
+    if (modelProbeState[modelID] && modelProbeState[modelID].state === "busy") return;
+    modelProbeState[modelID] = { state: "busy" };
+    redrawModelRow(modelID);
+    $("#modelHint").textContent = "正在测活 " + label + "…";
+
+    return api("/admin/api/models/probe", {method:"POST", body:{models:[modelID]}}).then(function(r){
+      var row0 = (r.results || [])[0] || {};
+      modelProbeState[modelID] = row0.ok
+        ? { state: "ok", account: row0.account }
+        : { state: "err", err: row0.error || "未知错误", account: row0.account };
+      redrawModelRow(modelID);
+      $("#modelHint").textContent = row0.ok
+        ? (label + " 可用" + (row0.account ? "（账号 " + row0.account + "）" : ""))
+        : (label + " 不可用：" + (row0.error || "未知错误"));
+    }).catch(function(e){
+      modelProbeState[modelID] = { state: "err", err: (e && e.message) || "请求失败" };
+      redrawModelRow(modelID);
+      $("#modelHint").textContent = label + " 测活失败：" + ((e && e.message) || "未知错误");
     });
-    $("#modelHint").textContent = d.upstream_error ? ("最近一次上游刷新失败：" + d.upstream_error) : "";
+  }
+
+  // redrawModelRow 只替换指定模型那一行，避免整表重绘打断其他行。
+  function redrawModelRow(modelID){
+    var tb = $("#models");
+    var rows = tb.children;
+    for (var i = 0; i < rows.length; i++) {
+      var first = rows[i].firstChild;
+      if (first && first.textContent === modelID) {
+        tb.replaceChild(modelRow(lastModels[modelID]), rows[i]);
+        return;
+      }
+    }
   }
 
   function renderAccounts(d){
@@ -667,40 +751,29 @@
     });
   });
   on("#checkinAll", function(){ return checkin(null); });
-  on("#probeModels", function(){
-    var tb = $("#probeResults");
-    tb.textContent = "";
-    $("#probeSummary").textContent = "测活中…（每个模型会真实消耗极少量积分）";
+  on("#probeAllModels", function(){
+    var ids = Object.keys(lastModels).filter(function(id){
+      return lastModels[id].source !== "alias";
+    });
+    if (!ids.length) { toast("模型清单为空，先点「从上游刷新清单」", "err"); return; }
+    ids.forEach(function(id){ modelProbeState[id] = { state: "busy" }; redrawModelRow(id); });
+    $("#modelHint").textContent = "正在测活 " + ids.length + " 个模型…（每个会真实消耗极少量积分）";
+
     return api("/admin/api/models/probe", {method:"POST", body:{}}).then(function(r){
-      tb.textContent = "";
-      var rows = r.results || [];
-      if (!rows.length) {
-        // 后端没返回任何行时也要说清楚，否则用户面对一张空表不知道发生了什么
-        var c = cell("没有可探测的模型：账号池为空，或模型清单尚未拉到", "empty");
-        c.colSpan = 4;
-        var tr = mk("tr"); tr.appendChild(c); tb.appendChild(tr);
-      }
-      rows.forEach(function(x){
-        var resCell = cell("");
-        resCell.appendChild(x.ok ? pill("可用", "ok") : pill("不可用", "err"));
-        tb.appendChild(row([
-          cell(x.model, "mono"),
-          resCell,
-          cell(x.account || "—", "muted"),
-          cell(x.ok ? "" : (x.error || ""), "muted")
-        ]));
+      (r.results || []).forEach(function(x){
+        modelProbeState[x.model] = x.ok
+          ? { state: "ok", account: x.account }
+          : { state: "err", err: x.error || "未知错误", account: x.account };
+        redrawModelRow(x.model);
       });
-      $("#probeSummary").textContent = "可用 " + (r.available||0) + " / " + (r.total||0) +
+      $("#modelHint").textContent = "可用 " + (r.available||0) + " / " + (r.total||0) +
         (r.unavailable ? "，不可用 " + r.unavailable : "");
       toast("测活完成：" + (r.available||0) + "/" + (r.total||0) + " 可用", "ok");
     }).catch(function(e){
-      // 失败时也要在表里留痕，不能只弹一个会消失的 toast
-      tb.textContent = "";
-      var c = cell("测活请求失败：" + (e && e.message ? e.message : "未知错误"), "empty");
-      c.colSpan = 4;
-      var tr = mk("tr"); tr.appendChild(c); tb.appendChild(tr);
-      $("#probeSummary").textContent = "";
-      toast("测活失败：" + (e && e.message ? e.message : "未知错误"), "err");
+      var msg = (e && e.message) ? e.message : "未知错误";
+      ids.forEach(function(id){ modelProbeState[id] = { state: "err", err: msg }; redrawModelRow(id); });
+      $("#modelHint").textContent = "测活失败：" + msg;
+      toast("测活失败：" + msg, "err");
     });
   });
   on("#claimAll", function(){ return claim(null); });
