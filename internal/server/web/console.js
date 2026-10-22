@@ -220,9 +220,12 @@
       box.appendChild(c);
     });
 
-    var tb = $("#models");
+  	var tb = $("#models");
     tb.textContent = "";
     var models = d.models || [];
+    // 每次渲染重建元数据索引：上游清单可能删掉了模型，留着旧条目会让
+    // 「测活全部」去探测已经不存在的模型，并让单行重绘拿到 undefined。
+    lastModels = {};
     if (!models.length) { tb.appendChild(emptyRow(7, "无")); return; }
     models.forEach(function(m){
       lastModels[m.id] = m;
@@ -309,12 +312,14 @@
 
   // redrawModelRow 只替换指定模型那一行，避免整表重绘打断其他行。
   function redrawModelRow(modelID){
+    var meta = lastModels[modelID];
+    if (!meta) return; // 清单已刷新、该模型不在了，无事可做
     var tb = $("#models");
     var rows = tb.children;
     for (var i = 0; i < rows.length; i++) {
       var first = rows[i].firstChild;
       if (first && first.textContent === modelID) {
-        tb.replaceChild(modelRow(lastModels[modelID]), rows[i]);
+        tb.replaceChild(modelRow(meta), rows[i]);
         return;
       }
     }
@@ -816,6 +821,8 @@
       return lastModels[id].source !== "alias";
     });
     if (!ids.length) { toast("模型清单为空，先点「从上游刷新清单」", "err"); return; }
+    // 每个模型都是一次真实请求、真实扣积分，全量探测前必须二次确认。
+    if (!window.confirm("将向 " + ids.length + " 个模型各发一次真实请求（max_tokens=8，会真实扣积分），确定继续？")) return;
     ids.forEach(function(id){ modelProbeState[id] = { state: "busy" }; redrawModelRow(id); });
     $("#modelHint").textContent = "正在测活 " + ids.length + " 个模型…（每个会真实消耗极少量积分）";
 
