@@ -59,7 +59,8 @@ goal                 goal-and-requirements.md        产品目标、能力、非
    ├─ adr-0001       docs/adr/0001-…                  只依赖标准库
    ├─ adr-0003       docs/adr/0003-…                  协议层抽出
    ├─ adr-0004       docs/adr/0004-…                  有意推迟的重构
-   └─ adr-0005       docs/adr/0005-…                  只剩积分通道
+   ├─ adr-0005       docs/adr/0005-…                  只剩积分通道
+   └─ adr-0006       docs/adr/0006-…                  凭据形态显式建模（STS / 永久 AK·SK）
 ```
 
 新建的 `goal` / `architecture` / 六个模块 `SPEC.md` 目前是 `status: draft` ——
@@ -79,6 +80,7 @@ goal                 goal-and-requirements.md        产品目标、能力、非
 | [0003](adr/0003-protocol-layer.md) | 协议转换抽到 `internal/protocol`，先测试后搬家 |
 | [0004](adr/0004-deferred-refactors.md) | 有意推迟的重构及原因（codearts 拆分、SSE、slog…） |
 | [0005](adr/0005-remove-benefit-channel.md) | 删除免费权益（benefit）通道，只保留积分通道 |
+| [0006](adr/0006-credential-kind.md) | 凭据形态显式建模：STS 临时凭据 / IAM 永久 AK·SK（不靠过期时间猜） |
 
 ---
 

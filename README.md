@@ -256,7 +256,19 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 | --- | --- | --- |
 | **自动导入桌面端登录态** | Windows，已装 CodeArts Agent 并登录过 | 启动时自动扫描 `%APPDATA%\codearts-agent`，无需任何操作 |
 | **本地浏览器登录** | 没装 IDE，或想给网关单独登录一个账号 | 网关自己起 OAuth 回调服务器，用浏览器完成登录 |
-| **手工录入 / session JSON** | 跨平台、Docker、远程部署 | 填 STS 临时 AK/SK，或粘贴解密后的 session JSON（含 refresh_token，仍可自动续期） |
+| **手工录入 / session JSON** | 跨平台、Docker、远程部署 | 填 STS 临时 AK/SK（约 2 小时）或 **IAM 永久 AK/SK**（不过期、不续期），或粘贴解密后的 session JSON（含 refresh_token，仍可自动续期） |
+
+#### 两种凭据形态
+
+| 形态 | 生命周期 | 续期 | 签名 |
+| --- | --- | --- | --- |
+| **STS 临时凭据**（默认） | 约 2 小时 | refresh_token + DPoP + PKCE，可自动续期 | SDK-HMAC-SHA256 + `x-security-token` |
+| **IAM 永久 AK/SK** | 不过期 | 无续期概念 | 纯 SDK-HMAC-SHA256（不带 security token） |
+
+两者在网关内部由 `Session.CredentialKind` **显式区分**，不靠「有没有过期时间」猜：
+永久凭据的 `expires_at` 本来就是零值，而早期实现把零值一律判为不可用，于是录入的
+IAM AK/SK 在 110 分钟后永久失效，且 `HasRefresh` 为 false、Manager 也救不回来。
+控制台对永久凭据显示「永不过期 / IAM AK/SK」，不会出现 1970 时间戳。
 
 导出的 session JSON 是**可移植**的 —— 它带着 `refresh_token`、DPoP 私钥与 PKCE
 verifier，所以在另一台机器 / 容器里导入后**仍然能自动续期**，不是只能活 2 小时。
@@ -431,7 +443,8 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 1. **从 session JSON 导入**（推荐）—— 在 Windows 机器上按 [3.2](#32-导出-session-json)
    导出，粘贴过来即可；带着 refresh_token 与 DPoP 私钥，**导入后仍能自动续期**
-2. **手工录入** —— 填 STS 临时 AK / SK / Security Token；只能活约 2 小时，之后需要重新填
+2. **手工录入** —— 填 STS 临时 AK / SK / Security Token（约 2 小时，之后需要重新填）；
+   或在「凭据类型」里选**永久 AK/SK**（IAM 永久凭据，不过期、不续期、不需要 Security Token）
 
 > 容器部署时 `docker-compose.yml` 已带 `-no-import`，不会去扫桌面端目录。
 
@@ -441,7 +454,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 
 <http://127.0.0.1:10087/>，三个内嵌文件（HTML + CSS + JS）、无外部依赖、可离线使用。
 
-- **概览**：请求统计、今日领取 n/m、**活动福利列表与邀请链接**、模型清单（含积分倍率）、一键刷新模型
+- **概览**：请求统计、今日领取 n/m、**活动福利列表与邀请链接（可按账号切换查看）**、模型清单（含积分倍率与**逐模型测活**）、一键刷新模型
 - **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **领取活动福利** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日领取」状态
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` **仅允许本机直连**）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
@@ -477,8 +490,9 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
 | POST | `/admin/api/checkin` | 账号连通性探活（用默认模型发一次 `max_tokens=8`，消耗极少积分） |
+| POST | `/admin/api/models/probe` | **逐模型测活**：对每个模型发一次 `max_tokens=8` 的真实请求（**真实扣积分**）。可选 `{"models":[...],"id":"<账号>"}`；单次上限 64 个模型，同一时刻只允许一个测活任务（并发时返回 `409`） |
 | POST | `/admin/api/claim` | **领取活动福利**：运营活动奖励（全部账号或指定 `id`；免费福利 Token 已随通道下线移除） |
-| GET | `/admin/api/welfare` | 运营活动清单与可领取状态 |
+| GET | `/admin/api/welfare` | 运营活动清单与可领取状态（**按账号查询**：`?id=<账号>`；响应带 `accounts` 列表与 `claimable_count`，不带 `id` 时取调度池的下一个账号） |
 | POST | `/admin/api/invite` | 生成专属邀请码与邀请链接（奖励仍需好友真实注册） |
 | POST | `/admin/api/models/refresh` | 从上游刷新模型清单 |
 | POST | `/admin/api/login/start` | **启动浏览器登录**，返回授权 URL + 回调地址 + SSH 隧道命令 |
@@ -498,7 +512,7 @@ Anthropic 侧映射为 `thinking` 内容块。
 | --- | --- | --- | --- |
 | **网关侧限流**（本机密钥打太快） | `429` | `rate_limit_error` | `rate_limit_error` |
 | 上游并发会话打满 / 429 限流 | `429` | `rate_limit_error` | `rate_limit_error` |
-| 请求参数或模型名不合法（含上游 `200 + error_code`） | `400` | `invalid_request_error` | `invalid_request_error` |
+| 请求参数或模型名不合法（含上游 `200 + error_code` 的业务错误） | `400` | `invalid_request_error` | `invalid_request_error` |
 | 模型不存在 | `404` | `invalid_request_error` | `invalid_request_error` |
 | 上游 5xx / 网络错误 | `502` | `upstream_error` | `overloaded_error` |
 | **账号登录态失效**（凭据过期且无法续期） | `502` | `credentials_error` | `authentication_error` |
@@ -506,6 +520,11 @@ Anthropic 侧映射为 `thinking` 内容块。
 
 > 上游把「并发会话数已达上限」表达为 `HTTP 400 + TM.00001041`，网关会先按
 > 临时性故障**退避重试**（不计入账号失败），重试仍失败才回 `429`。
+>
+> **请求本身不合法时不换号重试、也不计账号故障。** 参数越界（`temperature=99`、
+> `max_tokens` 超限、tools 超长）换哪个账号都一样，网关直接把上游的
+> `details[].error_msg` 带回来，账号保持 `ok`、`failures` 不变。
+> 反过来，`APIG.*` / `STS5.*` 这类凭据错误即使以 `400` 返回，仍会计入账号故障。
 >
 > **网关侧限流与上游 429 是两件事**：前者是「这个密钥自己打得太快」，响应会带
 > `Retry-After`（网关能算准补满令牌的时间）；后者是「账号的并发会话满了」，只能等或换账号。

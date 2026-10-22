@@ -88,7 +88,7 @@ docker compose run -e CODEARTS_ADMIN_PASSWORD='your-strong-password' codearts2ap
 | --- | --- | --- |
 | `429` + `rate_limit_error` | 上游并发会话打满（每账号上限 3）或限流 | 降低并发；多账号会更好。网关已对 `TM.00001041` 做过退避重试 |
 | `502` + `credentials_error`（Anthropic: `authentication_error`） | **登录态失效**，且无法自动续期 | 重新登录 CodeArts Agent，或用「浏览器登录」/「session JSON 导入」 |
-| `400` + `invalid_request_error` | 参数或模型名不合法（含上游 `200 + error_code`） | 检查请求体 |
+| `400` + `invalid_request_error` | 参数或模型名不合法（含上游 `200 + error_code` 的业务错误） | 检查请求体；上游的 `details[].error_msg` 会原样带回来 |
 | `404` | 模型不存在 | `GET /v1/models` 看可用清单 |
 | `502` + `upstream_error` | 上游 5xx / 网络错误 | 稍后重试；检查出网与代理 |
 | `503` + `server_error` | 账号池为空 | 控制台导入账号 |
@@ -109,6 +109,30 @@ docker compose run -e CODEARTS_ADMIN_PASSWORD='your-strong-password' codearts2ap
 `POST /admin/api/models/refresh` 或等 10 分钟的自动刷新。
 
 若控制台把「允许真实消耗积分」关掉了，所有模型调用会返回 `403`（不是 `4005`）。
+
+### 账号显示 `error`，但凭据其实是好的
+
+看 `last_err`：
+
+| `last_err` 长什么样 | 含义 | 处置 |
+| --- | --- | --- |
+| `上游 HTTP 400: ... param is invalid` | 是**你自己的请求**参数越界，不是账号问题 | 修请求。新版网关已不计账号故障、也不换号重试 |
+| `上游 HTTP 200: ...` | 旧版本的行为（状态码被写死成 200） | 升级网关；新版会把真实业务码映射成真实状态码 |
+| `本地 DPoP 密钥材料不完整…` | session JSON 里只写了私钥、没写公钥 | **无需重新登录**，用完整 session JSON 重新导入即可（新版会从私钥派生公钥） |
+| `DPoP 密钥校验失败` | 上游真的拒了 DPoP proof | 重新登录 |
+
+两个历史坑（已修复，仅供对号入座）：
+
+- **任意客户端发错一次参数，就把健康账号标成 `error` 并累加 `failures`** —— 因为当时把
+  「上游业务错误」一律计成账号故障。现在 `400/413/422` 直接回给客户端，不计故障。
+- **导入 IAM 永久 AK/SK 后，账号在 110 分钟后永久失效** —— 因为 `Valid()` 把
+  「过期时间为零值」判为不可用，而永久凭据的过期时间就是零值。现在按
+  `credential_kind` 显式区分（控制台会显示「永不过期 / IAM AK/SK」）。
+
+### `409` + `已有测活任务在运行`
+
+`POST /admin/api/models/probe` 同一时刻只允许一个任务：并发测活会把成本翻倍，
+还会打满单账号 3 个并发会话的上限、测出假「不可用」。等当前任务结束后再点。
 
 ### 非流式请求 `glm-5.3` 报 400 空 body
 

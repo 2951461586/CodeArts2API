@@ -190,10 +190,41 @@ body.model = "glm-5.3 "（尾随空格）
 改写模型名时（别名 / 强制模型）必须同时改写 `model-id` 与 `model-name` 两个头。
 见 `rewriteModel()` 与 `Client.baseHeaders()`。
 
-### 7.3 业务错误用 HTTP 200 表达
+### 7.3 业务错误用 HTTP 200 表达，真实状态码在 `error_code` 里
 
-上游可能返回 `200 + {"error_code":"4005","error_msg":"unsupported model"}`。
-这属于客户端错误，网关会转成 `400`，而不是当成成功响应。
+上游常用 `200 + {"error_code":"...","error_msg":"..."}` 表达失败，**HTTP 状态码本身不可信**。
+真实状态码编码在 `error_code` 里，实测三种形态：
+
+| 形态 | 例子 | 提取出的状态码 |
+| --- | --- | --- |
+| 纯数字业务码 | `"4005"` | 不在 400–599 → 兜底 `400` |
+| 纯数字状态码 | `"400"` / `"422"` | `400` / `422` |
+| 复合码 `服务.业务号.状态码` | `InferHub.002002009.404` | 取末段 → `404` |
+
+网关在 `statusFromCode()` 里做这个提取，**取不到一律兜底 400，绝不返回 200**。
+
+> 历史 bug：早期实现固定写 `Status: http.StatusOK`，于是日志里出现自相矛盾的
+> 「上游 HTTP 200: The request param is invalid」，真实业务码被丢弃；更严重的是
+> 状态码 200 让这类错误无法被 `IsClientRequestError` 识别，进而把健康账号标成 `error`、
+> 累加 `failures` 并触发熔断。
+
+拿到真实状态码之后，网关才能回答关键问题：**这是请求的问题，还是账号的问题？**
+
+| 判定 | 条件 | 处置 |
+| --- | --- | --- |
+| 客户端请求错误 | `400` / `413` / `422`，且不是空 body、不是凭据类错误码 | 直接返回客户端，**不计账号故障、不换号重试** |
+| 临时故障 | `429` / `5xx` / `TM.00001041` | 退避重试，**不计账号故障** |
+| 账号 / 上游故障 | 其余（含 `APIG.*` `STS5.*` 用 400 表达的情况） | 计入账号失败，换号重试 |
+
+实测的参数类业务码（`temperature=99`）：
+
+```json
+{"error_code":"InferHub.001001005.400",
+ "details":[{"error_code":"RANGE_VALIDATOR",
+             "error_msg":"temperature -> temperature should be between 0 and 2"}]}
+```
+
+→ 网关对外 `400 invalid_request_error`，账号保持 `ok`、`failures` 不变。
 
 ### 7.4 领取类接口是幂等的
 
@@ -213,9 +244,14 @@ body.model = "glm-5.3 "（尾随空格）
 | `STS5.1804` | refresh_token 已过期 | 同上 |
 | `STS5.1806` | refresh_token 已被使用（单次 + 轮转） | 同上；提示「IDE 与网关同时续期会互相作废」 |
 | `invalid_grant` | refresh_token 失效 | 同上 |
-| `4005` | 该通道不支持此模型 | `400 invalid_request_error` |
+| `4005` | 该通道不支持此模型 | `400 invalid_request_error`（`statusFromCode` 兜底） |
+| `InferHub.001001005.400` | 请求参数越界（`temperature` / `max_tokens` / tools 超长等） | `400 invalid_request_error`；**不计账号故障、不换号重试** |
 | `InferHub.001001011.406` | 模型名与 `model-id` 不一致 | `400 invalid_request_error` |
+| `InferHub.002002009.404` | 复合码，末段是真实状态码 | 按末段映射（此处 `404`） |
 | `TM.00001027` | 未通过学生认证（education 通道） | `400`（普通账号不应命中） |
+
+> 上面 `APIG.*` / `STS5.*` / `invalid_grant` 即使以 **HTTP 400** 返回，也必须计入账号故障：
+> `IsClientRequestError` 里有 `credentialCodes` 排除表，不能只看状态码是不是 4xx。
 
 **凭据失效是唯一需要人工介入的错误**，网关会明确提示「请重新登录 CodeArts Agent」，
 并刻意**不**报成 `overloaded_error`，避免客户端无限重试。
