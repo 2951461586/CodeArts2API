@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -239,6 +240,9 @@ func TestModelProbeFallsBackToNextAccount(t *testing.T) {
 // 别名不参与（它指向的仍是上游真实模型）。
 func TestModelProbeEmptyListUsesRegistry(t *testing.T) {
 	s := newAdminTestServer(t, "a")
+	// 测活按 4 路并发调用上游，假 transport 会被多个 goroutine 同时进入，
+	// 记录探测过的模型必须加锁（否则 -race 会报 write/write 竞争）。
+	var mu sync.Mutex
 	var probed []string
 	s.Up.HTTP = &http.Client{Transport: probeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(r.Body)
@@ -246,7 +250,9 @@ func TestModelProbeEmptyListUsesRegistry(t *testing.T) {
 			Model string `json:"model"`
 		}
 		_ = json.Unmarshal(body, &req)
+		mu.Lock()
 		probed = append(probed, req.Model)
+		mu.Unlock()
 		return probeFakeResponse(r, http.StatusOK, `{"choices":[{"message":{"content":"hi"}}]}`), nil
 	})}
 
@@ -265,6 +271,8 @@ func TestModelProbeEmptyListUsesRegistry(t *testing.T) {
 		t.Errorf("应探测兜底清单里的 %d 个上游模型，实际 %d", len(registry.Fallback), resp.Total)
 	}
 	// 别名不应出现在探测列表里。
+	mu.Lock()
+	defer mu.Unlock()
 	for _, id := range probed {
 		if id == "gpt-4o" || id == "claude-sonnet-4" {
 			t.Errorf("别名 %q 不应被单独测活", id)
