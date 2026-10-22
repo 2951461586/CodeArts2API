@@ -116,7 +116,7 @@ func (c *Client) Refresh(ctx context.Context, sess *Session) (*RefreshResult, er
 	if !sess.HasRefresh() {
 		return nil, fmt.Errorf("缺少 refresh_token / DPoP 私钥 / PKCE verifier，无法续期")
 	}
-	proof, err := dpopProof(sess.DPoPPrivateJWK, sess.DPoPPublicJWK, http.MethodPost, iamTokenURL)
+	proof, err := dpopProof(sess.DPoPPrivateJWK, sess.DPoPPublicJWK, http.MethodPost, c.tokenURL())
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (c *Client) Refresh(ctx context.Context, sess *Session) (*RefreshResult, er
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", sess.RefreshToken)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, iamTokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}

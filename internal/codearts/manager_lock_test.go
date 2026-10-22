@@ -30,11 +30,11 @@ func refreshableSession(t *testing.T, token string) *Session {
 	}
 }
 
-// startFakeTokenServer 起一个假的令牌端点，并把 iamTokenURL 指过去。
+// startFakeTokenServer 起一个假的令牌端点，返回它的地址。
 //
 // onRefresh 在每次收到续期请求时调用（参数是 refresh_token 的值），
 // 可以在里面阻塞，用来观察锁的行为。返回的凭据是 new-ak-<token>。
-func startFakeTokenServer(t *testing.T, onRefresh func(token string)) {
+func startFakeTokenServer(t *testing.T, onRefresh func(token string)) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -54,12 +54,15 @@ func startFakeTokenServer(t *testing.T, onRefresh func(token string)) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
-	old := iamTokenURL
-	iamTokenURL = srv.URL
-	t.Cleanup(func() {
-		iamTokenURL = old
-		srv.Close()
-	})
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// managerForTest 构造一个把令牌端点指向假服务器的 Manager。
+func managerForTest(tokenURL string) *Manager {
+	c := NewClient()
+	c.TokenURL = tokenURL
+	return NewManager(c)
 }
 
 // TestManagerRefreshesDifferentAccountsInParallel 回归：一个账号的续期不能挡住别的账号。
@@ -71,7 +74,7 @@ func TestManagerRefreshesDifferentAccountsInParallel(t *testing.T) {
 	slowEntered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	startFakeTokenServer(t, func(token string) {
+	tokenURL := startFakeTokenServer(t, func(token string) {
 		if token != "slow" {
 			return
 		}
@@ -79,7 +82,7 @@ func TestManagerRefreshesDifferentAccountsInParallel(t *testing.T) {
 		<-release
 	})
 
-	m := NewManager(NewClient())
+	m := managerForTest(tokenURL)
 	slow := &Account{ID: "slow-acct", Name: "slow", Session: refreshableSession(t, "slow")}
 	other := &Account{ID: "other-acct", Name: "other", Session: refreshableSession(t, "other")}
 
@@ -132,9 +135,9 @@ func TestManagerRefreshesDifferentAccountsInParallel(t *testing.T) {
 // 直接复用前一个刚拿到的会话，而不是拿已轮转的 token 再续一次。
 func TestManagerRefreshesSameAccountOnce(t *testing.T) {
 	var refreshes int32
-	startFakeTokenServer(t, func(string) { atomic.AddInt32(&refreshes, 1) })
+	tokenURL := startFakeTokenServer(t, func(string) { atomic.AddInt32(&refreshes, 1) })
 
-	m := NewManager(NewClient())
+	m := managerForTest(tokenURL)
 	// 两个独立的账号快照：模拟两个并发请求各自从 store 取到快照。
 	snapshots := []*Account{
 		{ID: "same-acct", Name: "same", Session: refreshableSession(t, "same")},

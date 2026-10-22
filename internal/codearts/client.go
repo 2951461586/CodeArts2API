@@ -53,13 +53,6 @@ const (
 	DefaultModel = "glm-5.3"
 )
 
-// iamTokenURL 是令牌端点的实际地址：默认就是 IAMTokenURL。
-//
-// 单独留一个变量是为了让续期 / 登录路径能被指向 httptest 服务器 ——
-// 续期的并发语义（同一账号串行、不同账号并行）只能靠真实 HTTP 往返来验证。
-// 生产代码不修改它。
-var iamTokenURL = IAMTokenURL
-
 // 上游通道：只剩积分（计费）通道。
 //
 // 2026-10 起，免费权益（benefit）通道整体下线 —— `benefit-gateway-config`
@@ -72,6 +65,20 @@ type Client struct {
 	HTTP *http.Client
 	// Identity 是可覆盖的上游身份头（为空时用内置缺省值）。
 	Identity Identity
+	// TokenURL 可覆盖令牌端点（为空时用 IAMTokenURL）。
+	//
+	// 生产代码不需要设置它；测试用 httptest 服务器验证续期 / 登录的并发语义
+	// （同一账号串行、不同账号并行）。用字段而不是包级变量：后者会让并行的
+	// 测试（以及登录流程的后台 goroutine）直接构成数据竞争。
+	TokenURL string
+}
+
+// tokenURL 返回实际使用的令牌端点。
+func (c *Client) tokenURL() string {
+	if c != nil && c.TokenURL != "" {
+		return c.TokenURL
+	}
+	return IAMTokenURL
 }
 
 // Identity 是发给上游的插件 / IDE 身份标识。
