@@ -1,0 +1,39 @@
+# Docker 构建上下文排除项。
+#
+# 关键：docker build 会把**整个目录**作为构建上下文发给 daemon（即使 Dockerfile
+# 不 COPY 它们）。本仓库根目录可能存在含真实凭据的运行期文件 —— 没有这份排除表，
+# `codearts-session.json` / `codearts2api-data.json` / `data/` 会被一起上传，
+# 并留在 daemon 的构建缓存里。
+
+# 运行期状态与凭据（含 STS AK/SK、securitytoken、refresh_token、DPoP 私钥）
+codearts-session.json
+codearts-session.json.tmp
+codearts2api-data.json
+codearts2api-data.json.tmp
+data/
+*.codearts2api.bak
+*.codearts2api.tmp
+
+# 构建产物
+codearts2api
+codearts2api.exe
+*.exe
+*.dll
+
+# 版本库与本地开发残留
+.git
+.gitattributes
+.gitignore
+.github/
+.thinkrail/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+**/__pycache__/
+*.pyc
+
+# 文档与逆向中间产物（不影响镜像构建）
+.recon/
+*.md
+docs/
+tools/

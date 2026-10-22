@@ -183,6 +183,9 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 		s.applyDefaults()
+		// 收紧已存在状态文件的权限：里面是 STS 凭据与 refresh_token。
+		// 旧版本或手工拷贝来的文件可能是 0644，这里纠正一次（Windows 上只影响只读属性）。
+		_ = os.Chmod(path, 0o600)
 	case errors.Is(err, os.ErrNotExist):
 		s.st.Version = StateVersion
 		s.st.Stats.StartedAt = time.Now().Unix()
@@ -315,7 +318,9 @@ func (s *Store) Save() error {
 		return err
 	}
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 目录只给本人：状态文件里是 STS 凭据与 refresh_token，别让同机其他用户
+	// 通过目录遍历拿到文件名与备份。
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 

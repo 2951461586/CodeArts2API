@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | STS 临时凭据（AK/SK/security token） | 状态文件、内存 | 可冒用账号调用上游 |
 | `refresh_token` + DPoP 私钥 | 状态文件、导出的 session JSON | **长期**接管账号登录态（约 30 天，可轮转续命） |
-| 网关 API 密钥（`sk-ca-...`） | 状态文件（哈希/掩码展示） | 可消耗账号额度 |
+| 网关 API 密钥（`sk-ca-...`） | 状态文件（**明文**存储，展示时掩码） | 可消耗账号额度 |
 | 管理密码 | 状态文件、浏览器 `sessionStorage` | 可读取/导出完整登录态 |
 | 请求日志 | 状态文件 | 仅元信息（模型、耗时、长度），不含对话内容 |
 
@@ -63,11 +63,12 @@
 | XSS | 控制台全程 `textContent` 渲染；CSP `default-src 'none'` + `script-src 'self'` + `style-src 'self'`（无 `unsafe-inline`） | `web.go`、`web/console.js` |
 | 开放重定向 | 浏览器登录的授权 URL 走华为云域名白名单 | `web/console.js: isTrustedAuthURL` |
 | SSRF | 回调 URL 只接受本机回调地址；拒绝内网/任意主机 | `codearts/login.go` |
-| 凭据落盘 | 状态文件 `0600`、原子替换（唯一临时文件 + 串行落盘） | `store.go: Save` |
+| 凭据落盘 | 状态文件 `0600`、目录 `0700`、原子替换（唯一临时文件 + 串行落盘）；打开时纠正历史文件的过宽权限 | `store.go: Open/Save` |
 | 凭据展示 | AK / 域 ID / APIKey 一律脱敏 | `codearts/util.go: Mask` |
 | 日志 | 只记元信息；`Authorization` / `X-Security-token` 从不写入 | `server/chat.go: record` |
 | 错误语义 | 凭据失效单独成类型，明确提示重新登录，不诱导重试 | `codearts/errors.go`、`internal/apierr` |
 | IDE 数据库回写 | 仅在长度一致时定长原地写，写前备份 `.bak` | `session_windows.go` |
+| 构建上下文 | `.dockerignore` 排除状态文件 / 凭据 / `data/` / `.git` / 构建产物，避免 `docker build` 把凭据上传到 daemon | `.dockerignore` |
 
 ### 残余风险（已知且未消除）
 
@@ -90,6 +91,7 @@
 - [ ] 只监听回环（默认），或在前置反向代理终止 TLS 并再加一层鉴权；
 - [ ] 反向代理**必须**透传真实来源头，且不要把管理接口暴露给公网；
 - [ ] 状态文件所在目录仅本人可读；不要把 `codearts2api-data.json` 放进共享目录或版本库；
+- [ ] 不要把 `codearts-session.json` / `codearts2api-data.json` 放进构建上下文（仓库已带 `.dockerignore`，自定义构建目录时需自行排除）；
 - [ ] 定期轮换 API 密钥；不再使用的账号从控制台删除；
 - [ ] 不导出、不外发 session JSON；确需迁移时用安全通道传输并事后轮换；
 - [ ] 保持 `CORS 允许来源` 为空（仅同源），除非确实有别的来源需要调用；
