@@ -126,8 +126,9 @@ func From(err error) Error {
 	case ue.Status == http.StatusNotFound:
 		return Error{Status: http.StatusNotFound, OpenAI: "invalid_request_error", Anthropic: "invalid_request_error"}
 	case ue.Status == http.StatusOK:
-		// 上游用「HTTP 200 + error_code」表达的业务错误（未知模型、参数非法…），
-		// 属于客户端问题，不应报成网关故障。
+		// 防御分支：业务错误不再产出 Status=200（`detectUpstreamError` 现在从
+		// error_code 里取真实状态码，见 `statusFromCode`）。保留它只为兜住将来
+		// 某个调用方又写出 `Status: 200` 的错误 —— 那属于客户端问题，不该报成网关故障。
 		return Error{Status: http.StatusBadRequest, OpenAI: "invalid_request_error", Anthropic: "invalid_request_error"}
 	case ue.Status >= 400 && ue.Status < 500:
 		return Error{Status: http.StatusBadRequest, OpenAI: "invalid_request_error", Anthropic: "invalid_request_error"}

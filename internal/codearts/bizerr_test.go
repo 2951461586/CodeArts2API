@@ -1,6 +1,7 @@
 package codearts
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -83,6 +84,44 @@ func TestIsClientRequestError(t *testing.T) {
 		if IsClientRequestError(e) {
 			t.Errorf("%q 不该判定为客户端请求错误", e.Error())
 		}
+	}
+}
+
+// TestClientRequestErrorExcludesNonRequestCauses 回归：4xx 并不都是「请求参数错」。
+//
+// 两个必须排除的 4xx：
+//   - 空 body 的 400：上游用它表示「这个模型只支持流式」，属于模型能力问题，
+//     有自己的流式重试路径，不能当成参数错直接回给客户端；
+//   - 凭据 / 签名类错误码用 400 表达时：这是账号侧问题，必须计数，
+//     否则失效账号会一直留在池子里被反复选中。
+func TestClientRequestErrorExcludesNonRequestCauses(t *testing.T) {
+	notClientErrs := []*UpstreamError{
+		{Status: http.StatusBadRequest, Message: ""}, // 空 body 的 400
+		{Status: http.StatusBadRequest, Message: "   "},
+		{Status: http.StatusBadRequest, Message: "400: APIG.0303 signature verify failed"},
+		{Status: http.StatusBadRequest, Message: "400: APIG.0301"},
+		{Status: http.StatusBadRequest, Message: "400: STS5.1804 refresh token expired"},
+		{Status: http.StatusBadRequest, Message: "400: invalid_grant"},
+	}
+	for _, e := range notClientErrs {
+		if IsClientRequestError(e) {
+			t.Errorf("%q 不该判定为客户端请求错误", e.Error())
+		}
+	}
+}
+
+// TestClientRequestErrorUnwraps 回归：错误被包装后判定不能静默失效。
+//
+// 旧实现用裸类型断言 err.(*UpstreamError)，任何一层 fmt.Errorf("...: %w")
+// 都会让它返回 false，于是健康账号又被当成故障账号计数。
+func TestClientRequestErrorUnwraps(t *testing.T) {
+	base := &UpstreamError{Status: http.StatusBadRequest, Message: "400: The request param is invalid"}
+	wrapped := fmt.Errorf("chat 请求失败: %w", base)
+	if !IsClientRequestError(wrapped) {
+		t.Error("包装后的客户端请求错误应仍被识别")
+	}
+	if !IsTransientUpstream(fmt.Errorf("重试: %w", &UpstreamError{Status: http.StatusServiceUnavailable})) {
+		t.Error("包装后的临时故障应仍被识别")
 	}
 }
 
