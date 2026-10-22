@@ -23,6 +23,7 @@
 | 备用域名 | 同上 | `https://snap-access.cn-north-4.myhuaweicloud.cn` | 🔶 |
 | benefit 模型清单 | `GET /api/v1/gateway/config` | `https://opengw.developer.huaweicloud.com` | ❌ 已下线（`4000: invalid channel, group not found`） |
 | 每日额度 | `GET /api/v1/user/tokens/balance` | 同上 | ❌ 已下线（同上） |
+| 积分套餐与用量 | `GET /snap-manager/v1/statistics/plugin` | `https://snap-access.cn-north-4.myhuaweicloud.com` | 🔶 代码确认（Agent 26.9.902）；路径实测存在（未带凭据返回 `401`） |
 | benefit 通道开关 | `GET /v1/benefit-gateway-config` | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ 返回 `{"enabled":false}` |
 | 每日免费 Token 领取 | `GET /api/v1/benefit/claim`（幂等） | `https://opengw.developer.huaweicloud.com` | ❌ 已下线（同上） |
 | 可用模型清单 | `GET /v1/model/builtin`（需 `Agent-Type: PromptCenter`） | `https://snap-access.cn-north-4.myhuaweicloud.com` | ✅ |
@@ -86,6 +87,30 @@ GET /v1/model/builtin                 -> 200（8 个模型，全部 enable:true�
 **因此网关不再发送 `maas_type`**，也不再保留 benefit 通道的模型清单 / 额度 / 领取逻辑。
 原来那条「无法识别的模型名必须落到 benefit 通道」的约束随之失效 ——
 现在**无法识别的模型名直接报 404**，绝不静默换成别的模型扣费。
+
+### 3.1 积分套餐与用量（`/snap-manager/v1/statistics/plugin`）
+
+积分通道的「额度」不在已下线的 benefit 接口里，而在 snap-manager 的统计插件接口。
+网关 `GET /admin/api/credits` 用它给控制台填「积分额度」列。
+
+```text
+GET https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/statistics/plugin
+Authorization: SDK-HMAC-SHA256 ...        # 与其它 snap-access 接口同一套签名
+```
+
+响应关键字段（`package` + `metrics[]`）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `package.status` | `normal` / `closed` / `freeze`（控制台映射为 active / expired / frozen） |
+| `package.is_credit_package` / `is_token_package` | 套餐类型 |
+| `metrics[name=usageTotalPackageCredit]` | 积分总额：`package_credit_amount` / `package_credit_used` / `package_credit_remain` / `package_credit_expiring_amount` / `value`（百分比） |
+| `metrics[name=usageBasicPackageCredit]` 等 | 基础 / 按需 / 赠送积分的分类用量 |
+| `metrics[name=usageTokenChatMessages]` | token 套餐用量（积分套餐通常为 0） |
+| `end_date` | 额度重置日期 |
+
+没有 `usageTotalPackageCredit` 时表示当前账号不是积分套餐（token 套餐 / 白名单 / 未开通），
+控制台显示「无积分套餐」而不是 0。
 
 ---
 

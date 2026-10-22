@@ -325,12 +325,86 @@
     }
   }
 
+  // 每个账号的积分额度：id -> {loading, ok, credit, error}
+  var creditState = {};
+  var creditLoading = null;
+
+  // loadCredits 查询账号积分额度（上游统计插件）。
+  // 默认走服务端 60 秒缓存；force=true 时带 ?fresh=1 强制回源。
+  function loadCredits(force){
+    if (creditLoading) return creditLoading;
+    var accts = (state.data && state.data.accounts) || [];
+    if (!accts.length) return Promise.resolve();
+    accts.forEach(function(a){ creditState[a.id] = { loading: true }; });
+    if (state.data) renderAccounts(state.data);
+    var url = "/admin/api/credits" + (force ? "?fresh=1" : "");
+    creditLoading = api(url).then(function(d){
+      (d.accounts || []).forEach(function(x){
+        creditState[x.id] = x.ok
+          ? { loading:false, ok:true, credit:x.credit }
+          : { loading:false, ok:false, error:x.error };
+      });
+      if (state.data) renderAccounts(state.data);
+    }).catch(function(e){
+      var msg = (e && e.message) || "查询失败";
+      accts.forEach(function(a){ creditState[a.id] = { loading:false, ok:false, error:msg }; });
+      if (state.data) renderAccounts(state.data);
+      toast("查询积分额度失败：" + msg, "err");
+    }).then(function(){ creditLoading = null; });
+    return creditLoading;
+  }
+
+  // creditCell 渲染一个账号的积分额度：剩余/总量 + 进度条 + 重置日期。
+  function creditCell(a){
+    var c = cell("", "cell-stack");
+    var st = creditState[a.id];
+    if (!st || st.loading) {
+      c.appendChild(mk("span", "muted", st ? "查询中…" : "—"));
+      return c;
+    }
+    if (!st.ok) {
+      var bad = mk("span", "muted", "查询失败");
+      bad.title = st.error || "";
+      c.appendChild(bad);
+      return c;
+    }
+    var info = st.credit || {};
+    if (!info.available) {
+      var none = mk("span", "muted", "无积分套餐");
+      none.title = info.reason || "";
+      c.appendChild(none);
+      return c;
+    }
+    var total = Number(info.total) || 0;
+    var remain = Number(info.remaining) || 0;
+    var used = Number(info.used) || 0;
+    c.appendChild(mk("span", "mono", fmtNum(remain) + " / " + fmtNum(total)));
+
+    var bar = mk("div", "bar credit-bar");
+    var fill = mk("i");
+    var pct = total > 0 ? Math.max(0, Math.min(100, (remain / total) * 100)) : 0;
+    fill.style.width = pct.toFixed(1) + "%";
+    if (pct <= 20) bar.classList.add("err");
+    else if (pct <= 50) bar.classList.add("warn");
+    bar.appendChild(fill);
+    c.appendChild(bar);
+
+    var bits = ["已用 " + fmtNum(used)];
+    if (info.expiring) bits.push("即将到期 " + fmtNum(info.expiring));
+    if (info.reset_date) bits.push("重置 " + info.reset_date);
+    if (info.status && info.status !== "active") bits.push(info.status);
+    var sub = mk("span", "sub", bits.join(" · "));
+    sub.title = (info.package_name || "") + (info.spec_code ? (" / " + info.spec_code) : "");
+    c.appendChild(sub);
+    return c;
+  }
+
   function renderAccounts(d){
     var tb = $("#accounts");
     tb.textContent = "";
     var accts = d.accounts || [];
     if (!accts.length) {
-      tb.appendChild(emptyRow(9, "暂无账号，点击「导入本机 CodeArts Agent 登录态」或在下方手工录入"));
+      tb.appendChild(emptyRow(10, "暂无账号，点击「导入本机 CodeArts Agent 登录态」或在下方手工录入"));
       return;
     }
     accts.forEach(function(a){
@@ -382,7 +456,7 @@
 
       var r = row([
         cell(a.name), cell(a.source, "muted"), cell(a.access_key || "—", "mono"),
-        expCell, statusCell, claimCell, cell(a.failures, "mono"),
+        expCell, creditCell(a), statusCell, claimCell, cell(a.failures, "mono"),
         cell(fmtTime(a.last_used), "muted nowrap"), ops
       ]);
       if (a.last_err) r.title = a.last_err;
@@ -483,6 +557,8 @@
       var now = new Date();
       var p2 = function(n){ return (n < 10 ? "0" : "") + n; };
       $("#lastSync").textContent = "已更新 " + p2(now.getHours()) + ":" + p2(now.getMinutes()) + ":" + p2(now.getSeconds());
+      // 账号页可见时补一次额度（首次进页签时 refresh 可能还没回来）
+      if ($("#tab-accounts").classList.contains("on")) loadCredits(false);
     }).catch(function(e){
       if (e.status === 401) {
         toast("需要管理密码：请在右上角输入后点「记住」\n" + e.message, "err");
@@ -721,6 +797,7 @@
     if (warm === false) return;
     if (name === "logs") refreshLogs();
     if (name === "overview") loadWelfare();
+    if (name === "accounts") loadCredits(false);
   }
   document.querySelectorAll("nav button").forEach(function(b){
     b.onclick = function(){ activateTab(b.dataset.tab, true); };
@@ -816,6 +893,7 @@
     });
   });
   on("#checkinAll", function(){ return checkin(null); });
+  on("#refreshCredits", function(){ return loadCredits(true); });
   on("#probeAllModels", function(){
     var ids = Object.keys(lastModels).filter(function(id){
       return lastModels[id].source !== "alias";

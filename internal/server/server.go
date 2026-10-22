@@ -40,6 +40,10 @@ type Server struct {
 	// 每次探测都是一次真实上游请求（真实扣积分），两个并发的全量探测不仅成本翻倍，
 	// 还会把单账号 3 个并发会话的上限打满，测出假「不可用」。
 	probeMu sync.Mutex
+
+	// 积分额度缓存：额度查询是真实上游请求，切页签 / 连续刷新时没必要每次都打。
+	creditMu    sync.Mutex
+	creditCache map[string]creditCacheEntry
 }
 
 // New 构造服务。
@@ -84,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/stats", s.withAdminAuth(s.handleAdminStats))
 	mux.HandleFunc("/admin/api/settings", s.withAdminAuth(s.handleAdminSettings))
 	mux.HandleFunc("/admin/api/checkin", s.withAdminAuth(s.handleAdminCheckin))
+	mux.HandleFunc("/admin/api/credits", s.withAdminAuth(s.handleAdminCredits))
 	mux.HandleFunc("/admin/api/models/probe", s.withAdminAuth(s.handleAdminModelProbe))
 	mux.HandleFunc("/admin/api/models/refresh", s.withAdminAuth(s.handleAdminRefreshModels))
 	mux.HandleFunc("/admin/api/claim", s.withAdminAuth(s.handleAdminClaim))

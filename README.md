@@ -490,6 +490,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
 | POST | `/admin/api/checkin` | 账号连通性探活（用默认模型发一次 `max_tokens=8`，消耗极少积分） |
+| GET | `/admin/api/credits` | **账号积分额度**（套餐总额 / 已用 / 剩余 / 到期）。可选 `?id=<账号>` 只查一个、`?fresh=1` 跳过 60 秒缓存；不消耗积分 |
 | POST | `/admin/api/models/probe` | **逐模型测活**：对每个模型发一次 `max_tokens=8` 的真实请求（**真实扣积分**）。可选 `{"models":[...],"id":"<账号>"}`；单次上限 64 个模型，同一时刻只允许一个测活任务（并发时返回 `409`） |
 | POST | `/admin/api/claim` | **领取活动福利**：运营活动奖励（全部账号或指定 `id`；免费福利 Token 已随通道下线移除） |
 | GET | `/admin/api/welfare` | 运营活动清单与可领取状态（**按账号查询**：`?id=<账号>`；响应带 `accounts` 列表与 `claimable_count`，不带 `id` 时取调度池的下一个账号） |

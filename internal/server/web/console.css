@@ -451,6 +451,9 @@ section.on{
 .bar.warn > i{background:var(--warn)}
 .bar.err > i{background:var(--err)}
 
+/* 账号积分额度：表格里的迷你进度条，避免撑宽单元格 */
+.credit-bar{width:120px;margin-top:3px}
+
 /* ===== 表格 ============================================================= */
 
 .table-wrap{

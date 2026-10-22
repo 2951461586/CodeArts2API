@@ -36,6 +36,10 @@ references: [adr-0001, adr-0005]
 - **临时故障不能熔断账号。** 并发上限、429、5xx 只是「换个时机重试」，把它们计成账号故障
   会让健康账号被误标不可用。
 - **空 body 的 4xx 值得用流式重试一次** —— 上游对只支持流式的模型就是这么拒绝非流式请求的。
+- **积分额度来自统计插件，不是已下线的 benefit 余额接口。** `FetchCreditInfo` 打
+  `/snap-manager/v1/statistics/plugin`，从 `metrics[]` 里取 `usageTotalPackageCredit`；
+  没有该指标表示账号不是积分套餐（token / 白名单 / 未开通），返回 `Available=false`
+  并带上原因，而不是让控制台显示「0 积分」。
 - **凭据形态显式区分，不靠「有没有过期时间」猜。** `Session.CredentialKind` 区分 STS 临时凭据
   （零值，兼容旧状态文件）与 IAM 永久 AK/SK。永久凭据的 `ExpiresAt` 就是零值，
   `Valid()` 必须对它短路为 true，否则 110 分钟后账号永久失效且无法续期。

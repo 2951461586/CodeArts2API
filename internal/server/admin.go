@@ -597,6 +597,120 @@ func dedupeModels(ids []string) []string {
 	return out
 }
 
+// creditCacheTTL 是积分额度的缓存时长。
+//
+// 额度查询是一次真实上游请求；切换页签 / 连续刷新时没必要每次都打上游。
+// 控制台点「刷新额度」会带 ?fresh=1 绕过缓存。
+const creditCacheTTL = 60 * time.Second
+
+// creditCacheEntry 是一次额度查询的结果。失败也缓存，避免上游故障时被反复重试。
+type creditCacheEntry struct {
+	info *codearts.CreditInfo
+	err  error
+	at   time.Time
+}
+
+// handleAdminCredits 返回账号的积分额度（上游 snap-manager 统计插件）。
+//
+//	GET /admin/api/credits           → 全部账号
+//	GET /admin/api/credits?id=<账号>  → 指定账号
+//	GET ...?fresh=1                  → 跳过 60 秒缓存
+func (s *Server) handleAdminCredits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "仅支持 GET", "invalid_request_error")
+		return
+	}
+	fresh := r.URL.Query().Get("fresh") != ""
+	targets := s.Store.Accounts()
+	if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" {
+		targets = nil
+		if a := s.Store.Account(id); a != nil {
+			targets = append(targets, a)
+		}
+	}
+	if len(targets) == 0 {
+		writeErr(w, http.StatusBadRequest, apierr.NoAccount.Error(), "invalid_request_error")
+		return
+	}
+
+	// 每个账号一次上游请求：并发 4 路，避免把单账号 3 个并发会话的上限打满。
+	type creditRow struct {
+		idx int
+		row map[string]any
+	}
+	results := make([]map[string]any, len(targets))
+	ch := make(chan creditRow, len(targets))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, a := range targets {
+		wg.Add(1)
+		go func(idx int, a *codearts.Account) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			row := map[string]any{"id": a.ID, "name": a.DisplayName()}
+			info, err := s.creditFor(r.Context(), a, fresh)
+			if err != nil {
+				row["ok"] = false
+				row["error"] = err.Error()
+			} else {
+				row["ok"] = true
+				row["credit"] = info
+			}
+			// 只往 channel 写，切片由主 goroutine 汇总，避免并发写。
+			ch <- creditRow{idx: idx, row: row}
+		}(i, a)
+	}
+	wg.Wait()
+	close(ch)
+	for c := range ch {
+		results[c.idx] = c.row
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": results})
+}
+
+// creditFor 解析凭据并查询积分额度，带短缓存。
+func (s *Server) creditFor(ctx context.Context, a *codearts.Account, fresh bool) (*codearts.CreditInfo, error) {
+	if !fresh {
+		if info, err, ok := s.cachedCredit(a.ID); ok {
+			return info, err
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
+	if err != nil {
+		s.storeCredit(a.ID, nil, err)
+		return nil, err
+	}
+	info, err := s.Up.FetchCreditInfo(ctx, sess)
+	s.storeCredit(a.ID, info, err)
+	return info, err
+}
+
+// cachedCredit 返回 TTL 内的缓存结果。
+func (s *Server) cachedCredit(id string) (*codearts.CreditInfo, error, bool) {
+	s.creditMu.Lock()
+	defer s.creditMu.Unlock()
+	e, ok := s.creditCache[id]
+	if !ok || time.Since(e.at) > creditCacheTTL {
+		return nil, nil, false
+	}
+	return e.info, e.err, true
+}
+
+// storeCredit 记录一次额度查询结果。
+func (s *Server) storeCredit(id string, info *codearts.CreditInfo, err error) {
+	s.creditMu.Lock()
+	defer s.creditMu.Unlock()
+	if s.creditCache == nil {
+		s.creditCache = map[string]creditCacheEntry{}
+	}
+	s.creditCache[id] = creditCacheEntry{info: info, err: err, at: time.Now()}
+}
+
 // setIf 仅在指针非空时赋值。
 func setIf[T any](dst *T, src *T) {
 	if src != nil {
