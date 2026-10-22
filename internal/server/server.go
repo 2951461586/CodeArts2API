@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"codearts2api/internal/apierr"
@@ -33,6 +34,12 @@ type Server struct {
 
 	// 上游模型清单 / 额度的内存缓存
 	cache *modelCache
+
+	// probeMu 保证同一时刻只有一个模型测活任务在跑。
+	//
+	// 每次探测都是一次真实上游请求（真实扣积分），两个并发的全量探测不仅成本翻倍，
+	// 还会把单账号 3 个并发会话的上限打满，测出假「不可用」。
+	probeMu sync.Mutex
 }
 
 // New 构造服务。

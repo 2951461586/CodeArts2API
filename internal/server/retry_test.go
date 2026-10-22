@@ -99,6 +99,12 @@ func TestWithAccountRetryMarksHardFailure(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("尝试了 %d 次，期望 2 次（两个账号各一次）", len(seen))
 	}
+	// 多账号用例必须真的用到两个不同账号。
+	// 回归背景：newTestServer 曾给所有账号同一个 AccessKey，UpsertAccount 按 AK 去重
+	// 把 N 个账号合并成 1 个 —— 于是这个断言「过了」，但其实只测了单账号。
+	if seen[0] == seen[1] {
+		t.Fatalf("两次尝试都落在账号 %s，账号轮换没生效", seen[0])
+	}
 	for _, id := range seen {
 		if acct := s.Store.Account(id); acct.Failures == 0 {
 			t.Errorf("账号 %s 的硬失败没有计数", id)

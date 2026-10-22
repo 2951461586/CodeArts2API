@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -448,14 +449,36 @@ func (s *Server) defaultProbeModel() (registry.Model, bool) {
 	return s.Reg.Resolve(st.DefaultModel, st.ModelAliases)
 }
 
+// probeMaxModels 是一次测活请求允许探测的模型数上限。
+//
+// 每个模型都是一次真实上游请求、真实扣积分，因此必须有上限：上游清单异常变大时，
+// 不能让一次点击变成无界的消耗。超限要求调用方分批，而不是静默截断。
+const probeMaxModels = 64
+
+// probeAttemptTimeout 是「一个模型 × 一个账号」的探测超时。
+//
+// 上游正常几百毫秒到几秒就返回；30 秒还没回基本可判定这次尝试无望，
+// 早点换下一个账号，避免「多账号 × 多模型」把整个请求拖到客户端超时。
+const probeAttemptTimeout = 30 * time.Second
+
 // handleAdminModelProbe 逐个模型做一次最小真实请求，返回每个模型是否可用。
 //
 // 与 handleAdminCheckin 的区别：那个只探一个默认模型、判断的是「账号通不通」；
 // 这个遍历当前模型清单，判断的是「这个账号能不能用某个模型」——上游会把当前
 // 套餐未注册的模型也列进 /v1/models，只有真打一次才知道能不能用。
 //
-// 每个模型消耗极少量积分（max_tokens=8），调用方需在 UI 上提示。
+// 成本约束：一次探测 = 一次真实上游请求（max_tokens=8，真实扣积分），因此有三道闸门：
+// 单次请求的模型数上限、同一时刻只允许一个测活任务、每次尝试的超时。
+// 前端在全量测活前还要用户二次确认。
 func (s *Server) handleAdminModelProbe(w http.ResponseWriter, r *http.Request) {
+	// 同一时刻只允许一个测活任务：两个并发的全量探测会把成本翻倍，也会把单账号
+	// 3 个并发会话的上限打满 —— 结果反而测出「不可用」，把用户引到错误结论上。
+	if !s.probeMu.TryLock() {
+		writeErr(w, http.StatusConflict, "已有测活任务在运行，请等它结束后再试", "invalid_request_error")
+		return
+	}
+	defer s.probeMu.Unlock()
+
 	var body struct {
 		ID     string   `json:"id"`
 		Models []string `json:"models"`
@@ -486,8 +509,15 @@ func (s *Server) handleAdminModelProbe(w http.ResponseWriter, r *http.Request) {
 			want = append(want, m.ID)
 		}
 	}
+	want = dedupeModels(want)
 	if len(want) == 0 {
 		writeErr(w, http.StatusBadRequest, "模型清单为空", "invalid_request_error")
+		return
+	}
+	if len(want) > probeMaxModels {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Sprintf("一次最多测活 %d 个模型（当前 %d 个），请分批进行", probeMaxModels, len(want)),
+			"invalid_request_error")
 		return
 	}
 
@@ -507,7 +537,13 @@ func (s *Server) handleAdminModelProbe(w http.ResponseWriter, r *http.Request) {
 			row := map[string]any{"model": modelID}
 			// 依次尝试账号，任一账号能用即判定该模型可用。
 			for _, a := range targets {
-				ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+				// 客户端断开后不必再花积分试下一个账号。
+				if r.Context().Err() != nil {
+					row["ok"] = false
+					row["error"] = "测活已取消"
+					break
+				}
+				ctx, cancel := context.WithTimeout(r.Context(), probeAttemptTimeout)
 				sess, err := s.Cred.Session(ctx, a, s.resolveOptions())
 				if err != nil {
 					row["ok"] = false
@@ -542,6 +578,23 @@ func (s *Server) handleAdminModelProbe(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "total": len(results), "available": okCount,
 		"unavailable": len(results) - okCount, "results": results,
 	})
+}
+
+// dedupeModels 去掉空值、首尾空白与重复的模型 ID。
+//
+// 重复 ID 会变成两次真实扣费，而调用方（控制台）没有任何理由需要重复探测。
+func dedupeModels(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // setIf 仅在指针非空时赋值。
