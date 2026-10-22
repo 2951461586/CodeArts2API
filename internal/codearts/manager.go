@@ -46,6 +46,10 @@ type Manager struct {
 	mu       sync.Mutex
 	liveAt   map[string]time.Time
 	liveSess map[string]*Session
+	// acctMu 是「每个账号一把锁」：同一账号的解析（含续期）串行，不同账号并行。
+	//
+	// 锁的粒度写在这里而不是用一把全局锁，理由见 Session 的注释。
+	acctMu map[string]*sync.Mutex
 }
 
 // NewManager 构造凭据管理器。
@@ -54,6 +58,7 @@ func NewManager(c *Client) *Manager {
 		Client:   c,
 		liveAt:   map[string]time.Time{},
 		liveSess: map[string]*Session{},
+		acctMu:   map[string]*sync.Mutex{},
 	}
 }
 
@@ -64,6 +69,16 @@ func (m *Manager) logf(format string, args ...any) {
 }
 
 // Session 解析出该账号当前可用的凭据。
+//
+// 锁的粒度是「账号」，不是整个 Manager：
+//
+//   - 必须串行：refresh_token 是「单次使用 + 轮转」的，同一账号两个 goroutine
+//     同时续期会互相作废（上游报 STS5.1806，见 docs/UPSTREAM.md §8）；
+//   - 不能全局串行：续期是网络调用（最长可达几十秒），全局锁会让一个账号的续期
+//     挡住所有其他账号 —— 测活这类 4 路并发会在凭据解析阶段退化成串行。
+//
+// 拿到锁之后才解析：排在后面的 goroutine 会看到前一个刚写入缓存的会话
+// （resolve 的第 1 步），直接复用，不会拿已轮转的 refresh_token 再续一次。
 func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions) (*Session, error) {
 	if opt.LiveTTL <= 0 {
 		opt.LiveTTL = 10 * time.Second
@@ -72,15 +87,20 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 		opt.Margin = 5 * time.Minute
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lock := m.accountLock(acct.ID)
+	lock.Lock()
+	defer lock.Unlock()
 
+	return m.resolve(ctx, acct, opt)
+}
+
+// resolve 是 Session 的实际解析逻辑。调用方必须已持有该账号的锁。
+func (m *Manager) resolve(ctx context.Context, acct *Account, opt ResolveOptions) (*Session, error) {
 	// 1) 实时会话（带短缓存）
-	live := m.cachedLive(acct, opt.LiveTTL)
+	live := m.cachedLive(acct.ID, opt.LiveTTL)
 	if live == nil && acct.UserData != "" {
 		if s, err := ReadSession(acct.UserData); err == nil {
-			m.liveAt[acct.ID] = time.Now()
-			m.liveSess[acct.ID] = s
+			m.setLive(acct.ID, s)
 			live = s
 		} else {
 			m.logf("账号 %s 读取 IDE 会话失败: %v", acct.DisplayName(), err)
@@ -131,8 +151,7 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 	m.logf("账号 %s 续期成功，新凭据有效期至 %s", acct.DisplayName(), res.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
 
 	m.adopt(acct, &updated)
-	m.liveSess[acct.ID] = &updated
-	m.liveAt[acct.ID] = time.Now()
+	m.setLive(acct.ID, &updated)
 
 	if opt.WriteBack && acct.UserData != "" {
 		if err := writeBackSession(acct.UserData, &updated); err != nil {
@@ -145,16 +164,51 @@ func (m *Manager) Session(ctx context.Context, acct *Account, opt ResolveOptions
 	return &updated, nil
 }
 
-// cachedLive 返回仍在 TTL 内的实时会话。
-func (m *Manager) cachedLive(acct *Account, ttl time.Duration) *Session {
-	if acct.UserData == "" {
-		return nil
-	}
-	at, ok := m.liveAt[acct.ID]
+// cachedLive 返回 TTL 内缓存的最新会话。
+//
+// 缓存里既有「从 IDE 实时读到」的会话，也有「网关自己续期得到」的会话 ——
+// 后者同样必须缓存：并发的第二个请求要能直接拿到刚轮转过的凭据，
+// 否则它会拿已作废的 refresh_token 再续一次（上游回 STS5.1806）。
+func (m *Manager) cachedLive(id string, ttl time.Duration) *Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.liveAt[id]
 	if !ok || time.Since(at) > ttl {
 		return nil
 	}
-	return m.liveSess[acct.ID]
+	return m.liveSess[id]
+}
+
+// setLive 记录一份「最新会话」（IDE 实时读取或网关续期结果）。
+func (m *Manager) setLive(id string, s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// 允许零值 Manager（&Manager{}）—— 测试里会这么建。
+	if m.liveAt == nil {
+		m.liveAt = map[string]time.Time{}
+	}
+	if m.liveSess == nil {
+		m.liveSess = map[string]*Session{}
+	}
+	m.liveAt[id] = time.Now()
+	m.liveSess[id] = s
+}
+
+// accountLock 返回该账号的互斥锁，不存在则创建。
+//
+// 只持 m.mu 做一次 map 查找，不跨任何 I/O。账号数量是个位数，条目不做回收。
+func (m *Manager) accountLock(id string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.acctMu == nil {
+		m.acctMu = map[string]*sync.Mutex{}
+	}
+	l, ok := m.acctMu[id]
+	if !ok {
+		l = new(sync.Mutex)
+		m.acctMu[id] = l
+	}
+	return l
 }
 
 // adopt 把新会话记到账号快照上；凭据真的变了就通知持久化。

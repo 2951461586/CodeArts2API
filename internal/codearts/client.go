@@ -53,6 +53,13 @@ const (
 	DefaultModel = "glm-5.3"
 )
 
+// iamTokenURL 是令牌端点的实际地址：默认就是 IAMTokenURL。
+//
+// 单独留一个变量是为了让续期 / 登录路径能被指向 httptest 服务器 ——
+// 续期的并发语义（同一账号串行、不同账号并行）只能靠真实 HTTP 往返来验证。
+// 生产代码不修改它。
+var iamTokenURL = IAMTokenURL
+
 // 上游通道：只剩积分（计费）通道。
 //
 // 2026-10 起，免费权益（benefit）通道整体下线 —— `benefit-gateway-config`

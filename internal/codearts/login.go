@@ -550,7 +550,7 @@ func (f *LoginFlow) finish(status LoginStatus, msg string, sess *Session) {
 
 // ExchangeAuthorizationCode 用授权码换取 STS 临时凭据。
 func (c *Client) ExchangeAuthorizationCode(ctx context.Context, code string, pkce pkcePair, dpop dpopKeyPair, port int) (*Session, error) {
-	proof, err := dpopProof(dpop.PrivateKeyJWK, dpop.PublicKeyJWK, http.MethodPost, IAMTokenURL)
+	proof, err := dpopProof(dpop.PrivateKeyJWK, dpop.PublicKeyJWK, http.MethodPost, iamTokenURL)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +563,7 @@ func (c *Client) ExchangeAuthorizationCode(ctx context.Context, code string, pkc
 	form.Set("grant_type", "authorization_code")
 	form.Set("redirect_uri", redirect)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, IAMTokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, iamTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
